@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import sys
 import time
 import xml.etree.ElementTree as ET
@@ -38,6 +39,8 @@ NO_DATA_RESULT_CODE = "03"
 DAILY_LIMIT_RESULT_CODE = "22"
 TRANSIENT_RESULT_CODES = {"01", "02", "04", "05"}
 
+LAWD_CD_PATTERN = re.compile(r"^\d{5}$")
+
 KST = timezone(timedelta(hours=9))
 
 API_CONFIGS = [
@@ -61,7 +64,19 @@ class FatalApiError(Exception):
 
 
 def load_region_codes() -> list[dict]:
-    return json.loads(LEGAL_DONG_CODE_PATH.read_text(encoding="utf-8"))
+    """법정동 코드 목록을 읽어온다.
+
+    이후 이 값(region["code"])은 API 요청 파라미터로 전송되고, 진행 상황 파일
+    (progress/partial)에도 그대로 기록된다. legal_dong_code.json은 외부에서
+    내려받은 참조 데이터라 Sonar가 신뢰할 수 없는 입력으로 간주하므로, 값을
+    쓰기 전에 여기서 형식을 검증해 이후 모든 사용처로 오염이 전파되지 않게 한다.
+    """
+    region_codes = json.loads(LEGAL_DONG_CODE_PATH.read_text(encoding="utf-8"))
+    for region in region_codes:
+        code = region.get("code", "")
+        if not LAWD_CD_PATTERN.fullmatch(code):
+            raise ValueError(f"올바르지 않은 법정동 코드입니다: {code!r}")
+    return region_codes
 
 
 def generate_yyyymm_range(start: str = START_YYYYMM, end: str = END_YYYYMM) -> list[str]:
