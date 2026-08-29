@@ -169,6 +169,13 @@ def parse_response(root: ET.Element) -> tuple[str, str, list[dict], int]:
     return result_code, result_msg, items, total_count
 
 
+def _retry_or_raise(attempt: int, error_message: str, cause: Exception | None = None) -> None:
+    """재시도 한도 내면 백오프만큼 대기하고, 넘었으면 FatalApiError를 발생시킨다."""
+    if attempt > MAX_TRANSIENT_RETRIES:
+        raise FatalApiError(error_message) from cause
+    time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+
+
 def fetch_page_with_retry(
     session: requests.Session,
     base_url: str,
@@ -194,9 +201,7 @@ def fetch_page_with_retry(
             root = safe_xml_fromstring(response.text)
             result_code, result_msg, items, total_count = parse_response(root)
         except (requests.RequestException, ET.ParseError) as exc:
-            if attempt > MAX_TRANSIENT_RETRIES:
-                raise FatalApiError(f"네트워크/파싱 오류가 반복되어 중단합니다: {exc}") from exc
-            time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+            _retry_or_raise(attempt, f"네트워크/파싱 오류가 반복되어 중단합니다: {exc}", exc)
             continue
 
         if result_code == SUCCESS_RESULT_CODE or result_code == NO_DATA_RESULT_CODE:
@@ -207,9 +212,7 @@ def fetch_page_with_retry(
             raise DailyLimitReached(result_msg)
 
         if result_code in TRANSIENT_RESULT_CODES:
-            if attempt > MAX_TRANSIENT_RETRIES:
-                raise FatalApiError(f"API 오류 {result_code}: {result_msg}")
-            time.sleep(RETRY_BACKOFF_SECONDS * attempt)
+            _retry_or_raise(attempt, f"API 오류 {result_code}: {result_msg}")
             continue
 
         raise FatalApiError(f"API 오류 {result_code}: {result_msg}")
