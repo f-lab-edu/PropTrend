@@ -6,7 +6,7 @@ from pathlib import Path
 import requests
 from dotenv import load_dotenv
 
-API_URL = "http://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList"
+API_URL = "https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList"
 OUTPUT_PATH = Path(__file__).resolve().parent / "legal_dong_code.json"
 MAX_ROWS_PER_PAGE = 10000
 
