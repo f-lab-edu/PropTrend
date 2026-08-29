@@ -12,8 +12,8 @@ CREATE TABLE sale_transactions (
     -- 공통 컬럼
     property_type              VARCHAR(20)    NOT NULL,
     house_type                 VARCHAR(10),
-    sido_code                  CHAR(2)        NOT NULL,
-    sigungu_code               CHAR(3)        NOT NULL,
+    sido_code                  VARCHAR(2)     NOT NULL,
+    sigungu_code               VARCHAR(3)     NOT NULL,
     umd_name                   VARCHAR(60)    NOT NULL,
     jibun                      VARCHAR(20),
     building_name              VARCHAR(100),
@@ -35,7 +35,7 @@ CREATE TABLE sale_transactions (
     cancel_deal_date           DATE,
     registration_date          DATE,
     apartment_dong             VARCHAR(50),
-    land_leasehold_type        CHAR(1),
+    land_leasehold_type        VARCHAR(1),
     sigungu_name               VARCHAR(30),
 
     CONSTRAINT chk_sale_transactions_property_type
@@ -92,8 +92,8 @@ CREATE TABLE rent_transactions (
     -- 공통 컬럼
     property_type            VARCHAR(20)    NOT NULL,
     house_type               VARCHAR(10),
-    sido_code                CHAR(2)        NOT NULL,
-    sigungu_code             CHAR(3)        NOT NULL,
+    sido_code                VARCHAR(2)     NOT NULL,
+    sigungu_code             VARCHAR(3)     NOT NULL,
     umd_name                 VARCHAR(60)    NOT NULL,
     jibun                    VARCHAR(20),
     building_name            VARCHAR(100),
