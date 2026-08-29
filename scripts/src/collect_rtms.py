@@ -11,7 +11,7 @@ import requests
 from dotenv import load_dotenv
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
-LEGAL_DONG_CODE_PATH = Path(__file__).resolve().parent / "legal_dong_code.json"
+LEGAL_DONG_CODE_PATH = Path(__file__).resolve().parent / "results/legal_dong_code.json"
 
 START_YYYYMM = "202608"
 END_YYYYMM = "200601"
@@ -77,8 +77,19 @@ def build_work_items(region_codes: list[dict]) -> list[tuple[str, str]]:
     ]
 
 
-def output_path(api_id: str, yyyymm: str, region_code: str) -> Path:
-    return RESULTS_DIR / api_id / yyyymm / f"{region_code}.json"
+def output_path(api_id: str, yyyymm: str) -> Path:
+    """최종적으로 S3에 업로드될, 월 단위로 병합된 파일."""
+    return RESULTS_DIR / api_id / f"{yyyymm}.json"
+
+
+def partial_path(api_id: str, yyyymm: str) -> Path:
+    """월 수집이 끝나기 전까지 지역별 결과를 임시로 쌓아두는 로컬 스테이징 파일.
+
+    1회성 로컬 백필 과정에서만 쓰이는 파일이며, Lambda 등 원격 실행 환경으로
+    옮겨갈 필요는 없다(그 경우엔 한 invocation이 한 달 분량을 통째로 메모리에
+    누적했다가 끝나면 최종 파일 하나만 기록하는 편이 더 단순하다).
+    """
+    return RESULTS_DIR / api_id / f"{yyyymm}.json.partial"
 
 
 def progress_path(api_id: str) -> Path:
@@ -216,28 +227,66 @@ def fetch_all_items_for_region_month(
     return result_code, result_msg, all_items
 
 
-def save_output(
-    api_id: str,
-    yyyymm: str,
-    region_code: str,
-    result_code: str,
-    result_msg: str,
-    items: list[dict],
-) -> None:
-    path = output_path(api_id, yyyymm, region_code)
+def append_partial(api_id: str, yyyymm: str, region_code: str, items: list[dict]) -> None:
+    """한 지역의 수집 결과를 스테이징 파일에 한 줄(JSON Lines)로 추가한다.
+
+    지역별로 파일 전체를 다시 쓰지 않고 append만 하므로 지역 수가 많은 달도
+    저비용 I/O로 처리된다. 각 줄에 region_code를 함께 남기면, append 이후
+    progress 저장 전에 프로세스가 죽어 같은 지역을 재수집하더라도 로드 시
+    마지막 줄이 이전 줄을 덮어써 중복 없이 복구된다.
+    """
+    path = partial_path(api_id, yyyymm)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    line = {"region_code": region_code, "items": items}
+    with path.open("a", encoding="utf-8") as f:
+        f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+def load_partial_items(api_id: str, yyyymm: str) -> list[dict]:
+    path = partial_path(api_id, yyyymm)
+    if not path.exists():
+        return []
+
+    by_region: dict[str, list[dict]] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        entry = json.loads(line)
+        by_region[entry["region_code"]] = entry["items"]
+
+    items: list[dict] = []
+    for region_items in by_region.values():
+        items.extend(region_items)
+    return items
+
+
+def finalize_month(api_id: str, yyyymm: str, items: list[dict]) -> None:
+    """해당 월의 모든 지역 수집이 끝난 뒤 병합 결과를 최종 파일로 확정하고
+    스테이징 파일을 정리한다. S3에는 이 최종 파일 하나만 업로드하면 된다."""
+    path = output_path(api_id, yyyymm)
     path.parent.mkdir(parents=True, exist_ok=True)
     data = {
-        "header": {"resultCode": result_code, "resultMsg": result_msg},
+        "header": {"resultCode": SUCCESS_RESULT_CODE, "resultMsg": "OK"},
         "body": {"items": {"item": items}},
     }
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp_path = path.with_suffix(".json.tmp")
+    tmp_path.write_text(json.dumps(data, ensure_ascii=False) + "\n", encoding="utf-8")
+    os.replace(tmp_path, path)
+    partial_path(api_id, yyyymm).unlink(missing_ok=True)
 
 
 def run_collector(api_id: str, base_url: str, service_key: str) -> dict:
     """Run one API's full collection loop. Runs inside its own thread, so it must
     never call sys.exit() (that would only kill this thread) — instead it returns
-    a status dict and the caller (main) logs/aggregates it."""
+    a status dict and the caller (main) logs/aggregates it.
+
+    출력 파일은 지역별이 아니라 (api_id, yyyymm) 단위로 하나만 남는다. 지역별
+    결과는 스테이징 파일에 모았다가, 해당 월의 마지막 지역까지 끝나면 병합해서
+    최종 파일 하나로 확정한다.
+    """
     region_codes = load_region_codes()
+    num_regions = len(region_codes)
     work_items = build_work_items(region_codes)
     start_index = resume_start_index(work_items, api_id)
     total = len(work_items)
@@ -245,14 +294,23 @@ def run_collector(api_id: str, base_url: str, service_key: str) -> dict:
     print(f"[{api_id}] {start_index}/{total} 지점부터 재개합니다.")
 
     completed = 0
-    with requests.Session() as session:
-        for i in range(start_index, total):
-            yyyymm, region_code = work_items[i]
-            path = output_path(api_id, yyyymm, region_code)
+    current_yyyymm: str | None = None
+    month_items: list[dict] = []
 
-            if path.exists():
-                save_progress(api_id, yyyymm, region_code)
-                continue
+    with requests.Session() as session:
+        i = start_index
+        while i < total:
+            yyyymm, region_code = work_items[i]
+
+            if yyyymm != current_yyyymm:
+                final_path = output_path(api_id, yyyymm)
+                if final_path.exists():
+                    # 이 달은 이미 병합 완료됨 — 지역 전부 건너뛴다.
+                    save_progress(api_id, yyyymm, region_codes[-1]["code"])
+                    i += num_regions
+                    continue
+                current_yyyymm = yyyymm
+                month_items = load_partial_items(api_id, yyyymm)
 
             try:
                 result_code, result_msg, items = fetch_all_items_for_region_month(
@@ -269,9 +327,18 @@ def run_collector(api_id: str, base_url: str, service_key: str) -> dict:
                 print(f"[{api_id}] 치명적 오류로 중단합니다: {exc}", file=sys.stderr)
                 return {"api_id": api_id, "status": "fatal_error", "completed": completed, "error": str(exc)}
 
-            save_output(api_id, yyyymm, region_code, result_code, result_msg, items)
+            month_items.extend(items)
+            append_partial(api_id, yyyymm, region_code, items)
             save_progress(api_id, yyyymm, region_code)
             completed += 1
+
+            is_last_region_of_month = i == total - 1 or work_items[i + 1][0] != yyyymm
+            if is_last_region_of_month:
+                finalize_month(api_id, yyyymm, month_items)
+                current_yyyymm = None
+                month_items = []
+
+            i += 1
 
     print(f"[{api_id}] 모든 지역/기간 수집이 완료되었습니다. (이번 실행 {completed}건)")
     return {"api_id": api_id, "status": "completed", "completed": completed}
