@@ -8,10 +8,24 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
+from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 from dotenv import load_dotenv
 
 RESULTS_DIR = Path(__file__).resolve().parent / "results"
 LEGAL_DONG_CODE_PATH = Path(__file__).resolve().parent / "results/legal_dong_code.json"
+
+
+def _resolve_within_results_dir(path: Path) -> Path:
+    """api_id/yyyymm 등으로 조합한 경로가 RESULTS_DIR 밖을 가리키지 않는지 검증한다.
+
+    이 값들은 현재는 하드코딩된 API_CONFIGS/생성된 연월 문자열이라 실질적인 위협은
+    없지만, 정적 분석 도구(Sonar S2083)는 이를 신뢰할 수 없는 입력으로 간주하므로
+    경로 조합 지점에서 한 번에 검증한다.
+    """
+    resolved = path.resolve()
+    if not resolved.is_relative_to(RESULTS_DIR.resolve()):
+        raise ValueError(f"허용되지 않은 경로입니다: {resolved}")
+    return resolved
 
 START_YYYYMM = "202608"
 END_YYYYMM = "200601"
@@ -79,7 +93,7 @@ def build_work_items(region_codes: list[dict]) -> list[tuple[str, str]]:
 
 def output_path(api_id: str, yyyymm: str) -> Path:
     """최종적으로 S3에 업로드될, 월 단위로 병합된 파일."""
-    return RESULTS_DIR / api_id / f"{yyyymm}.json"
+    return _resolve_within_results_dir(RESULTS_DIR / api_id / f"{yyyymm}.json")
 
 
 def partial_path(api_id: str, yyyymm: str) -> Path:
@@ -89,11 +103,11 @@ def partial_path(api_id: str, yyyymm: str) -> Path:
     옮겨갈 필요는 없다(그 경우엔 한 invocation이 한 달 분량을 통째로 메모리에
     누적했다가 끝나면 최종 파일 하나만 기록하는 편이 더 단순하다).
     """
-    return RESULTS_DIR / api_id / f"{yyyymm}.json.partial"
+    return _resolve_within_results_dir(RESULTS_DIR / api_id / f"{yyyymm}.json.partial")
 
 
 def progress_path(api_id: str) -> Path:
-    return RESULTS_DIR / f"{api_id}.progress.json"
+    return _resolve_within_results_dir(RESULTS_DIR / f"{api_id}.progress.json")
 
 
 def load_progress(api_id: str) -> dict | None:
@@ -177,7 +191,7 @@ def fetch_page_with_retry(
         try:
             response = session.get(base_url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
             response.raise_for_status()
-            root = ET.fromstring(response.text)
+            root = safe_xml_fromstring(response.text)
             result_code, result_msg, items, total_count = parse_response(root)
         except (requests.RequestException, ET.ParseError) as exc:
             if attempt > MAX_TRANSIENT_RETRIES:
