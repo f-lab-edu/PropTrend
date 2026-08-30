@@ -1,0 +1,243 @@
+## 사용자(users)
+
+- id
+  - 식별자
+  - BIGINT
+  - NOT NULL
+  - PK
+- name
+  - 사용자 이름
+  - VARCHAR(20)
+  - NOT NULL
+- email
+  - 이메일
+  - VARCHAR(255)
+  - NOT NULL
+  - UNIQUE
+- password
+  - 사용자 이름
+  - VARCHAR(255)
+  - NOT NULL
+- created_at
+  - 생성일자
+  - TIMESTAMP
+  - NOT NULL
+
+- PK: id
+- UNIQUE: email
+
+## 매매 데이터(sale_transactions)
+
+원본: 아파트/오피스텔/연립다세대/단독·다가구 매매 4종 API.
+
+- id
+  - 식별자
+  - BIGINT
+  - NOT NULL
+  - PK
+- property_type
+  - 부동산 유형
+  - VARCHAR(20)
+  - NOT NULL
+  - `APT`(아파트) / `OFFICETEL`(오피스텔) / `ROW_HOUSE`(연립다세대) / `SINGLE_MULTI`(단독·다가구)
+- house_type
+  - 원본 `houseType` 그대로(`연립`/`다세대`/`단독`/`다가구`). 아파트·오피스텔은 NULL
+  - VARCHAR(10)
+  - NULL
+- sido_code
+  - 시도코드(법정동코드 1~2번째 자리). `legal_dong_code.sido_cd`와 동일 값으로 조인 가능
+  - CHAR(2)
+  - NOT NULL
+- sigungu_code
+  - 시군구코드(법정동코드 3~5번째 자리). `legal_dong_code.sgg_cd`(3자리)와 동일 값으로 조인 가능. 원본 RTMS API 응답의 `sggCd`는 이 둘을 합친 5자리임에 주의
+  - CHAR(3)
+  - NOT NULL
+- umd_name
+  - 법정동명
+  - VARCHAR(60)
+  - NOT NULL
+- jibun
+  - 지번. 단독·다가구 전월세만 원본에 필드 자체가 없어 항상 NULL
+  - VARCHAR(20)
+  - NULL
+- building_name
+  - 단지/건물명 (`aptNm`/`offiNm`/`mhouseNm` 통합). 단독·다가구는 NULL
+  - VARCHAR(100)
+  - NULL
+- deal_date
+  - `dealYear`+`dealMonth`+`dealDay` 통합
+  - DATE
+  - NOT NULL
+- exclusive_use_area
+  - 전용면적(㎡). 단독·다가구는 개념이 없어 NULL
+  - NUMERIC(10,4)
+  - NULL
+- floor
+  - 층. 단독·다가구는 NULL
+  - SMALLINT
+  - NULL
+- build_year
+  - 건축년도
+  - SMALLINT
+  - NULL
+- total_floor_area
+  - 연면적(원본 `totalFloorAr`). 단독·다가구만
+  - NUMERIC(10,4)
+  - NULL
+- plottage_area
+  - 대지면적(원본 `plottageAr`). 단독·다가구 매매만
+  - NUMERIC(10,4)
+  - NULL
+- land_area
+  - 대지권면적(원본 `landAr`). 연립다세대 매매만
+  - NUMERIC(10,4)
+  - NULL
+- deal_amount
+  - 거래금액(원, 원본 `dealAmount`). 콤마 제거 후 ×10,000
+  - BIGINT
+  - NOT NULL
+- dealing_type
+  - 거래유형(중개거래/직거래, 원본 `dealingGbn`)
+  - VARCHAR(20)
+  - NULL
+- estate_agent_sigungu_name
+  - 중개사소재지 시군구 단위(원본 `estateAgentSggNm`)
+  - VARCHAR(100)
+  - NULL
+- seller_type
+  - 매도자 구분(개인/법인/공공기관/기타, 원본 `slerGbn`)
+  - VARCHAR(20)
+  - NULL
+- buyer_type
+  - 매수자 구분(원본 `buyerGbn`)
+  - VARCHAR(20)
+  - NULL
+- cancel_deal_type
+  - 해제여부(원본 `cdealType`)
+  - VARCHAR(10)
+  - NULL
+- cancel_deal_date
+  - 해제사유발생일(원본 `cdealDay`)
+  - DATE
+  - NULL
+- registration_date
+  - 등기일자(원본 `rgstDate`). 아파트·연립다세대 매매만 존재(오피스텔·단독다가구는 원본에 필드 없음)
+  - DATE
+  - NULL
+- apartment_dong
+  - 아파트 동명(원본 `aptDong`). 아파트 매매만
+  - VARCHAR(50)
+  - NULL
+- land_leasehold_type
+  - 토지임대부 아파트 여부(Y/N, 원본 `landLeaseholdGbn`). 아파트 매매만
+  - CHAR(1)
+  - NULL
+- sigungu_name
+  - 시군구명(원본 `sggNm`). 오피스텔 매매만 원본에 포함
+  - VARCHAR(30)
+  - NULL
+
+- PK: id
+- UNIQUE: (sido_code, sigungu_code, umd_name, jibun, building_name, deal_date, floor, exclusive_use_area, deal_amount)
+
+## 전월세 데이터(rent_transactions)
+
+원본: 아파트/오피스텔/연립다세대/단독·다가구 전월세 4종 API.
+
+- id
+  - 식별자
+  - BIGINT
+  - NOT NULL
+  - PK
+- property_type
+  - 부동산 유형
+  - VARCHAR(20)
+  - NOT NULL
+  - `APT`(아파트) / `OFFICETEL`(오피스텔) / `ROW_HOUSE`(연립다세대) / `SINGLE_MULTI`(단독·다가구)
+- house_type
+  - 원본 `houseType` 그대로(`연립`/`다세대`/`단독`/`다가구`). 아파트·오피스텔은 NULL
+  - VARCHAR(10)
+  - NULL
+- sido_code
+  - 시도코드(법정동코드 1~2번째 자리). `legal_dong_code.sido_cd`와 동일 값으로 조인 가능
+  - CHAR(2)
+  - NOT NULL
+- sigungu_code
+  - 시군구코드(법정동코드 3~5번째 자리). `legal_dong_code.sgg_cd`(3자리)와 동일 값으로 조인 가능. 원본 RTMS API 응답의 `sggCd`는 이 둘을 합친 5자리임에 주의
+  - CHAR(3)
+  - NOT NULL
+- umd_name
+  - 법정동명
+  - VARCHAR(60)
+  - NOT NULL
+- jibun
+  - 지번. 단독·다가구 전월세만 원본에 필드 자체가 없어 항상 NULL
+  - VARCHAR(20)
+  - NULL
+- building_name
+  - 단지/건물명 (`aptNm`/`offiNm`/`mhouseNm` 통합). 단독·다가구는 NULL
+  - VARCHAR(100)
+  - NULL
+- deal_date
+  - `dealYear`+`dealMonth`+`dealDay` 통합
+  - DATE
+  - NOT NULL
+- exclusive_use_area
+  - 전용면적(㎡). 단독·다가구는 개념이 없어 NULL
+  - NUMERIC(10,4)
+  - NULL
+- floor
+  - 층. 단독·다가구는 NULL
+  - SMALLINT
+  - NULL
+- build_year
+  - 건축년도
+  - SMALLINT
+  - NULL
+- total_floor_area
+  - 연면적(원본 `totalFloorAr`). 단독·다가구만
+  - NUMERIC(10,4)
+  - NULL
+- deposit
+  - 보증금(원, 원본 `deposit`). 콤마 제거 후 ×10,000
+  - BIGINT
+  - NOT NULL
+- monthly_rent
+  - 월세(원, 원본 `monthlyRent`). 전세는 0
+  - BIGINT
+  - NOT NULL
+- contract_term
+  - 계약기간(예: `24.09~26.09`, 원본 `contractTerm`)
+  - VARCHAR(20)
+  - NULL
+- contract_type
+  - 계약구분(신규/갱신, 원본 `contractType`)
+  - VARCHAR(10)
+  - NULL
+- renewal_right_used
+  - 갱신요구권 사용여부(원본 `useRRRight`)
+  - VARCHAR(10)
+  - NULL
+- previous_deposit
+  - 종전계약 보증금(원, 원본 `preDeposit`)
+  - BIGINT
+  - NULL
+- previous_monthly_rent
+  - 종전계약 월세(원, 원본 `preMonthlyRent`)
+  - BIGINT
+  - NULL
+- sigungu_name
+  - 시군구명(원본 `sggNm`). 오피스텔 전월세만
+  - VARCHAR(30)
+  - NULL
+- apartment_serial_number
+  - 단지 일련번호(원본 `aptSeq`). 아파트 전월세만
+  - VARCHAR(20)
+  - NULL
+- road_address_detail
+  - 도로명주소 상세. 아파트 전월세에만 존재하는 7개 필드(`roadnm`/`roadnmsggcd`/`roadnmcd`/`roadnmseq`/`roadnmbcd`/`roadnmbonbun`/`roadnmbubun`)를 그대로 묶어서 저장
+  - JSONB
+  - NULL
+
+- PK: id
+- UNIQUE: (sido_code, sigungu_code, umd_name, jibun, building_name, deal_date, floor, exclusive_use_area, deposit, monthly_rent)
