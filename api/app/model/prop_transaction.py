@@ -42,6 +42,7 @@ class PropTransactionMixin:
     exclusive_use_area: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
     floor: Mapped[int | None] = mapped_column(SmallInteger)
     build_year: Mapped[int | None] = mapped_column(SmallInteger)
+    dedup_hash: Mapped[str] = mapped_column(CHAR(64), nullable=False)
 
 
 class SaleTransaction(PropTransactionMixin, Base):
@@ -49,18 +50,7 @@ class SaleTransaction(PropTransactionMixin, Base):
 
     __tablename__ = "sale_transactions"
     __table_args__ = (
-        UniqueConstraint(
-            "sido_code",
-            "sigungu_code",
-            "umd_name",
-            "jibun",
-            "building_name",
-            "deal_date",
-            "floor",
-            "exclusive_use_area",
-            "deal_amount",
-            name="uq_sale_transactions_dedup",
-        ),
+        UniqueConstraint("dedup_hash", name="uq_sale_transactions_dedup_hash"),
     )
 
     total_floor_area: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
@@ -84,19 +74,7 @@ class RentTransaction(PropTransactionMixin, Base):
 
     __tablename__ = "rent_transactions"
     __table_args__ = (
-        UniqueConstraint(
-            "sido_code",
-            "sigungu_code",
-            "umd_name",
-            "jibun",
-            "building_name",
-            "deal_date",
-            "floor",
-            "exclusive_use_area",
-            "deposit",
-            "monthly_rent",
-            name="uq_rent_transactions_dedup",
-        ),
+        UniqueConstraint("dedup_hash", name="uq_rent_transactions_dedup_hash"),
     )
 
     total_floor_area: Mapped[Decimal | None] = mapped_column(Numeric(10, 4))
