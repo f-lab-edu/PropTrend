@@ -41,6 +41,32 @@ def _fetch_page(page_no: int) -> ET.Element:
     return root
 
 
+def _is_sigungu_row(row: ET.Element) -> bool:
+    """시군구 단위(하위 읍면동/리 없음) 행인지 판별한다."""
+    return (
+        row.findtext("sgg_cd") != "000"
+        and row.findtext("umd_cd") == "000"
+        and row.findtext("ri_cd") == "00"
+    )
+
+
+def _extract_region_code(row: ET.Element) -> tuple[str, str] | None:
+    if not _is_sigungu_row(row):
+        return None
+    region_cd = row.findtext("region_cd")
+    if region_cd is None:
+        return None
+    return region_cd[:5], row.findtext("locatadd_nm") or ""
+
+
+def _collect_page_into(root: ET.Element, codes: dict[str, str]) -> None:
+    for row in root.findall("./row"):
+        entry = _extract_region_code(row)
+        if entry is not None:
+            code, name = entry
+            codes[code] = name
+
+
 def collect_sigungu_codes() -> list[dict[str, str]]:
     """행정표준코드관리시스템(StanReginCd)에서 시군구 단위 법정동 코드를 전부 조회한다."""
     codes: dict[str, str] = {}
@@ -52,17 +78,7 @@ def collect_sigungu_codes() -> list[dict[str, str]]:
         if not rows:
             break
 
-        for row in rows:
-            if (
-                row.findtext("sgg_cd") == "000"
-                or row.findtext("umd_cd") != "000"
-                or row.findtext("ri_cd") != "00"
-            ):
-                continue
-            region_cd = row.findtext("region_cd")
-            if region_cd is None:
-                continue
-            codes[region_cd[:5]] = row.findtext("locatadd_nm") or ""
+        _collect_page_into(root, codes)
 
         total_count = int(root.findtext("./head/totalCount") or 0)
         if page_no * MAX_ROWS_PER_PAGE >= total_count:

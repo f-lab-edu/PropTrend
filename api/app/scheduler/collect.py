@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 S3_BUCKET = settings.s3_bucket
+S3_EXPECTED_BUCKET_OWNER = settings.s3_expected_bucket_owner
 S3_PREFIX = settings.s3_prefix
 SERVICE_KEY = settings.data_go_kr_service_key
 
@@ -95,7 +96,11 @@ def _recent_yyyymm_range(months: int = COLLECTION_MONTHS) -> list[str]:
 
 
 def _load_region_codes(s3_client: BaseClient) -> list[dict[str, str]]:
-    response = s3_client.get_object(Bucket=S3_BUCKET, Key=REGION_CODE_KEY)
+    response = s3_client.get_object(
+        Bucket=S3_BUCKET,
+        Key=REGION_CODE_KEY,
+        ExpectedBucketOwner=S3_EXPECTED_BUCKET_OWNER,
+    )
     region_codes = json.loads(response["Body"].read().decode("utf-8"))
     for region in region_codes:
         code = region.get("code", "")
@@ -214,7 +219,11 @@ def _upload_month(
     }
     payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
     s3_client.put_object(
-        Bucket=S3_BUCKET, Key=key, Body=payload, ContentType="application/json"
+        Bucket=S3_BUCKET,
+        Key=key,
+        Body=payload,
+        ContentType="application/json",
+        ExpectedBucketOwner=S3_EXPECTED_BUCKET_OWNER,
     )
 
 

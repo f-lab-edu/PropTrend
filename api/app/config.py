@@ -10,6 +10,7 @@ class Settings(BaseSettings):
         "postgresql+asyncpg://postgres:postgres@localhost:5432/prop_trend"
     )
     s3_bucket: str
+    s3_expected_bucket_owner: str
     s3_prefix: str = ""
     data_go_kr_service_key: str
 

@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 settings = get_settings()
 S3_BUCKET = settings.s3_bucket
+S3_EXPECTED_BUCKET_OWNER = settings.s3_expected_bucket_owner
 S3_PREFIX = settings.s3_prefix
 
 # api_id -> (property_type, "sale" | "rent")
@@ -40,7 +41,9 @@ SOURCE_DIRS: dict[str, tuple[PropertyType, str]] = {
 
 def _list_json_keys(s3_client: BaseClient, prefix: str) -> Iterator[str]:
     paginator = s3_client.get_paginator("list_objects_v2")
-    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+    for page in paginator.paginate(
+        Bucket=S3_BUCKET, Prefix=prefix, ExpectedBucketOwner=S3_EXPECTED_BUCKET_OWNER
+    ):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if key.endswith(".json"):
@@ -48,7 +51,9 @@ def _list_json_keys(s3_client: BaseClient, prefix: str) -> Iterator[str]:
 
 
 def _read_object(s3_client: BaseClient, key: str) -> str:
-    response = s3_client.get_object(Bucket=S3_BUCKET, Key=key)
+    response = s3_client.get_object(
+        Bucket=S3_BUCKET, Key=key, ExpectedBucketOwner=S3_EXPECTED_BUCKET_OWNER
+    )
     return response["Body"].read().decode("utf-8")
 
 
@@ -66,6 +71,7 @@ async def run_legal_dong_code_job() -> None:
         Key=REGION_CODE_KEY,
         Body=payload,
         ContentType="application/json",
+        ExpectedBucketOwner=S3_EXPECTED_BUCKET_OWNER,
     )
     logger.info(
         "legal dong code job finished: %d regions uploaded to %s",
