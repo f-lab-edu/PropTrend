@@ -7,11 +7,19 @@ requires-python = ">=3.14"
 dependencies = [
     "apscheduler>=3.11.3",
     "asyncpg>=0.31.0",
+    "defusedxml>=0.7.1",
     "fastapi[standard]>=0.141.1",
+    "httpx>=0.28.1",
     "sqlalchemy>=2.0.52",
 ]
 
 [dependency-groups]
 dev = [
+    "aiosqlite>=0.22.1",
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
     "ruff>=0.16.5",
 ]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
