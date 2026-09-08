@@ -1,238 +1,226 @@
 import contextlib
-import hashlib
-import json
 import logging
 import os
-from collections.abc import AsyncGenerator, Iterable
+import time
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
-from datetime import date
-from decimal import Decimal
-from pathlib import Path
-from typing import Any
+from dataclasses import dataclass
+from datetime import timedelta, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db import async_session_factory, engine
-from app.model import PropertyType, RentTransaction, SaleTransaction
+from data_collection.collectors import (
+    COLLECTION_MONTHS,
+    DailyLimitReachedError,
+    DataCollector,
+    RTMSAptRentCollector,
+    RTMSAptTradeCollector,
+    RTMSOffiRentCollector,
+    RTMSOffiTradeCollector,
+    RTMSRHRentCollector,
+    RTMSRHTradeCollector,
+    RTMSSHRentCollector,
+    RTMSSHTradeCollector,
+    StanReginCdCollector,
+)
+from data_collection.loader import (
+    DataLoader,
+    LegalStandardCodeLoader,
+    RentTransactionLoader,
+    SaleTransactionLoader,
+)
+from data_collection.processor import (
+    DataProcessor,
+    LegalDongCodeProcessor,
+    RTMSAptRentProcessor,
+    RTMSAptTradeProcessor,
+    RTMSOffiRentProcessor,
+    RTMSOffiTradeProcessor,
+    RTMSRHRentProcessor,
+    RTMSRHTradeProcessor,
+    RTMSSHRentProcessor,
+    RTMSSHTradeProcessor,
+)
 
 logger = logging.getLogger(__name__)
 
-RESULTS_DIR = Path(
-    os.environ.get(
-        "RESULTS_DIR", str(Path(__file__).resolve().parents[2] / "scripts" / "results")
-    )
+SERVICE_KEY_ENV = "DATA_GO_KR_SERVICE_KEY"
+
+KST = timezone(timedelta(hours=9))
+
+# 실거래 신고는 계약 후 30일 이내라 변경분 대부분이 최근 몇 달에 몰린다. 매일은 그
+# 구간만 짧게 훑고, 뒤늦은 계약 해제까지 반영하는 전체 구간은 주 1회만 돈다.
+RECENT_COLLECTION_MONTHS = 3
+FULL_COLLECTION_MONTHS = COLLECTION_MONTHS
+
+EXTRACTION_JOB_HOUR = 4
+EXTRACTION_JOB_MINUTE = 0
+
+# 두 작업은 같은 갱신 단위를 건드리므로 절대 겹쳐서는 안 된다. 요일을 나눠 배타적으로
+# 돌게 하면 잠금 없이도 동시 실행이 원천적으로 불가능하다.
+RECENT_JOB_DAYS = "mon-sat"
+FULL_JOB_DAYS = "sun"
+
+
+@dataclass(frozen=True)
+class Pipeline:
+    """한 데이터 소스의 수집 -> 가공 -> 적재 모듈 묶음."""
+
+    name: str
+    collector: type[DataCollector]
+    processor: type[DataProcessor]
+    loader: type[DataLoader]
+
+
+# 법정동코드를 맨 앞에 둔다. 실거래가 수집 모듈이 요청 파라미터로 쓰는 시군구 코드
+# 목록을 법정동코드 마스터 테이블에서 읽으므로, 행정구역 개편이 있어도 같은 실행 안에서
+# 마스터가 먼저 갱신되고 새 시군구까지 수집된다.
+PIPELINES: tuple[Pipeline, ...] = (
+    Pipeline(
+        "legal_dong_code",
+        StanReginCdCollector,
+        LegalDongCodeProcessor,
+        LegalStandardCodeLoader,
+    ),
+    Pipeline(
+        "apart_sale",
+        RTMSAptTradeCollector,
+        RTMSAptTradeProcessor,
+        SaleTransactionLoader,
+    ),
+    Pipeline(
+        "apart_rent",
+        RTMSAptRentCollector,
+        RTMSAptRentProcessor,
+        RentTransactionLoader,
+    ),
+    Pipeline(
+        "officetel_sale",
+        RTMSOffiTradeCollector,
+        RTMSOffiTradeProcessor,
+        SaleTransactionLoader,
+    ),
+    Pipeline(
+        "officetel_rent",
+        RTMSOffiRentCollector,
+        RTMSOffiRentProcessor,
+        RentTransactionLoader,
+    ),
+    Pipeline(
+        "multiflex_sale",
+        RTMSRHTradeCollector,
+        RTMSRHTradeProcessor,
+        SaleTransactionLoader,
+    ),
+    Pipeline(
+        "multiflex_rent",
+        RTMSRHRentCollector,
+        RTMSRHRentProcessor,
+        RentTransactionLoader,
+    ),
+    Pipeline(
+        "single_multi_family_sale",
+        RTMSSHTradeCollector,
+        RTMSSHTradeProcessor,
+        SaleTransactionLoader,
+    ),
+    Pipeline(
+        "single_multi_family_rent",
+        RTMSSHRentCollector,
+        RTMSSHRentProcessor,
+        RentTransactionLoader,
+    ),
 )
 
-# api_id -> (property_type, "sale" | "rent")
-SOURCE_DIRS: dict[str, tuple[PropertyType, str]] = {
-    "apart_sale": (PropertyType.APT, "sale"),
-    "apart_rent": (PropertyType.APT, "rent"),
-    "officetel_sale": (PropertyType.OFFICETEL, "sale"),
-    "officetel_rent": (PropertyType.OFFICETEL, "rent"),
-    "multiflex_sale": (PropertyType.ROW_HOUSE, "sale"),
-    "multiflex_rent": (PropertyType.ROW_HOUSE, "rent"),
-    "single_multi_family_sale": (PropertyType.SINGLE_MULTI, "sale"),
-    "single_multi_family_rent": (PropertyType.SINGLE_MULTI, "rent"),
-}
 
-BATCH_SIZE = 500
-
-ROAD_ADDRESS_FIELDS = (
-    "roadnm",
-    "roadnmsggcd",
-    "roadnmcd",
-    "roadnmseq",
-    "roadnmbcd",
-    "roadnmbonbun",
-    "roadnmbubun",
-)
-
-
-def _clean(value: str | None) -> str | None:
-    if value is None:
-        return None
-    cleaned = value.strip()
-    return cleaned or None
-
-
-def _to_amount(value: str | None) -> int | None:
-    cleaned = _clean(value)
-    if cleaned is None:
-        return None
-    return int(cleaned.replace(",", "")) * 10000
-
-
-def _to_decimal(value: str | None) -> Decimal | None:
-    cleaned = _clean(value)
-    return Decimal(cleaned) if cleaned is not None else None
-
-
-def _to_int(value: str | None) -> int | None:
-    cleaned = _clean(value)
-    return int(cleaned) if cleaned is not None else None
-
-
-def _to_deal_date(item: dict[str, Any]) -> date:
-    return date(int(item["dealYear"]), int(item["dealMonth"]), int(item["dealDay"]))
-
-
-def _to_partial_date(value: str | None) -> date | None:
-    cleaned = _clean(value)
-    if cleaned is None:
-        return None
-    yy, mm, dd = cleaned.split(".")
-    return date(2000 + int(yy), int(mm), int(dd))
-
-
-def _load_items(path: Path) -> list[dict[str, Any]]:
-    data = json.loads(path.read_text(encoding="utf-8"))
-    item = data.get("body", {}).get("items", {}).get("item")
-    if item is None:
-        return []
-    if isinstance(item, dict):
-        return [item]
-    return item
-
-
-def _road_address_detail(item: dict[str, Any]) -> dict[str, str | None] | None:
-    if not any(field in item for field in ROAD_ADDRESS_FIELDS):
-        return None
-    return {field: _clean(item.get(field)) for field in ROAD_ADDRESS_FIELDS}
-
-
-def _dedup_hash(row: dict[str, Any]) -> str:
-    """행 전체 내용 기반 해시. NULL이 섞인 컬럼 조합으로는 구분할 수 없는
-    row(예: 단독·다가구)도 내용이 다르면 반드시 다른 값이 되도록 보장한다."""
-    canonical = json.dumps(row, sort_keys=True, default=str, ensure_ascii=False)
-    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
-
-
-def _common_fields(item: dict[str, Any], property_type: PropertyType) -> dict[str, Any]:
-    sgg_cd = item["sggCd"]
-    return {
-        "property_type": property_type,
-        "house_type": _clean(item.get("houseType")),
-        "sido_code": sgg_cd[:2],
-        "sigungu_code": sgg_cd[2:5],
-        "umd_name": item["umdNm"],
-        "jibun": _clean(item.get("jibun")),
-        "building_name": _clean(
-            item.get("aptNm") or item.get("offiNm") or item.get("mhouseNm")
-        ),
-        "deal_date": _to_deal_date(item),
-        "exclusive_use_area": _to_decimal(item.get("excluUseAr")),
-        "floor": _to_int(item.get("floor")),
-        "build_year": _to_int(item.get("buildYear")),
-        "total_floor_area": _to_decimal(item.get("totalFloorAr")),
-        "sigungu_name": _clean(item.get("sggNm")),
-    }
-
-
-def _transform_sale_item(
-    item: dict[str, Any], property_type: PropertyType
-) -> dict[str, Any]:
-    row = _common_fields(item, property_type)
-    row.update(
-        {
-            "plottage_area": _to_decimal(item.get("plottageAr")),
-            "land_area": _to_decimal(item.get("landAr")),
-            "deal_amount": _to_amount(item["dealAmount"]),
-            "dealing_type": _clean(item.get("dealingGbn")),
-            "estate_agent_sigungu_name": _clean(item.get("estateAgentSggNm")),
-            "seller_type": _clean(item.get("slerGbn")),
-            "buyer_type": _clean(item.get("buyerGbn")),
-            "cancel_deal_type": _clean(item.get("cdealType")),
-            "cancel_deal_date": _to_partial_date(item.get("cdealDay")),
-            "registration_date": _to_partial_date(item.get("rgstDate")),
-            "apartment_dong": _clean(item.get("aptDong")),
-            "land_leasehold_type": _clean(item.get("landLeaseholdGbn")),
-        }
-    )
-    row["dedup_hash"] = _dedup_hash(row)
-    return row
-
-
-def _transform_rent_item(
-    item: dict[str, Any], property_type: PropertyType
-) -> dict[str, Any]:
-    row = _common_fields(item, property_type)
-    row.update(
-        {
-            "deposit": _to_amount(item["deposit"]),
-            "monthly_rent": _to_amount(item["monthlyRent"]),
-            "contract_term": _clean(item.get("contractTerm")),
-            "contract_type": _clean(item.get("contractType")),
-            "renewal_right_used": _clean(item.get("useRRRight")),
-            "previous_deposit": _to_amount(item.get("preDeposit")),
-            "previous_monthly_rent": _to_amount(item.get("preMonthlyRent")),
-            "apartment_serial_number": _clean(item.get("aptSeq")),
-            "road_address_detail": _road_address_detail(item),
-        }
-    )
-    row["dedup_hash"] = _dedup_hash(row)
-    return row
-
-
-def _chunked(rows: list[dict[str, Any]], size: int) -> Iterable[list[dict[str, Any]]]:
-    for start in range(0, len(rows), size):
-        yield rows[start : start + size]
-
-
-async def _upsert_rows(
-    session: AsyncSession,
-    model: type[SaleTransaction | RentTransaction],
-    rows: list[dict[str, Any]],
-) -> None:
-    for batch in _chunked(rows, BATCH_SIZE):
-        stmt = (
-            pg_insert(model)
-            .values(batch)
-            .on_conflict_do_nothing(index_elements=["dedup_hash"])
-        )
-        await session.execute(stmt)
-
-
-async def _ingest_file(
-    session: AsyncSession, path: Path, property_type: PropertyType, kind: str
+async def run_pipeline(
+    pipeline: Pipeline, service_key: str, collection_months: int
 ) -> int:
-    items = _load_items(path)
-    if not items:
-        return 0
-    if kind == "sale":
-        rows = [_transform_sale_item(item, property_type) for item in items]
-        await _upsert_rows(session, SaleTransaction, rows)
-    else:
-        rows = [_transform_rent_item(item, property_type) for item in items]
-        await _upsert_rows(session, RentTransaction, rows)
-    return len(rows)
+    """수집 -> 가공 -> 적재를 순서대로 수행하고 적재된 행 수를 반환한다."""
+    started = time.monotonic()
+
+    collector = pipeline.collector(
+        service_key, async_session_factory, collection_months=collection_months
+    )
+    raw_items = await collector.collect()
+    logger.info("%s: 원본 %d건 수집", pipeline.name, len(raw_items))
+
+    rows = pipeline.processor().process(raw_items)
+    logger.info("%s: %d행 가공", pipeline.name, len(rows))
+
+    # 적재 모듈이 (부동산 유형, 시군구, 계약년월) 단위로 기존 행을 지우고 다시 넣으므로,
+    # 같은 구간을 몇 번 수집해도 결과가 같고 나중에 갱신된 신고분도 그대로 반영된다.
+    loaded = await pipeline.loader(async_session_factory).load(rows)
+    logger.info(
+        "%s: %d행 적재 (%.1f분)",
+        pipeline.name,
+        loaded,
+        (time.monotonic() - started) / 60,
+    )
+    return loaded
 
 
-async def run_data_extraction_job() -> None:
-    """scripts/results의 월별 실거래가 JSON을 읽어 DB에 배치 적재한다."""
+async def run_data_extraction_job(collection_months: int) -> None:
+    """공공 데이터 API에서 최근 collection_months개월 실거래가를 수집해 DB에 적재한다."""
+    service_key = os.environ.get(SERVICE_KEY_ENV)
+    if not service_key:
+        logger.error("%s가 설정되지 않아 수집을 건너뜁니다", SERVICE_KEY_ENV)
+        return
+
+    logger.info("데이터 추출 작업 시작: 최근 %d개월", collection_months)
+    started = time.monotonic()
     total = 0
-    async with async_session_factory() as session:
-        for api_id, (property_type, kind) in SOURCE_DIRS.items():
-            source_dir = RESULTS_DIR / api_id
-            if not source_dir.is_dir():
-                logger.warning("source directory not found: %s", source_dir)
-                continue
-            for path in sorted(source_dir.glob("*.json")):
-                try:
-                    total += await _ingest_file(session, path, property_type, kind)
-                    await session.commit()
-                except Exception:
-                    await session.rollback()
-                    logger.exception("failed to ingest file: %s", path)
-    logger.info("data extraction job finished: %d rows processed", total)
+    failures: list[str] = []
+    for pipeline in PIPELINES:
+        try:
+            total += await run_pipeline(pipeline, service_key, collection_months)
+        except DailyLimitReachedError:
+            # 일일 호출 한도는 서비스 키가 아니라 API별로 걸리므로, 한 소스가 한도에
+            # 도달해도 나머지 소스는 자기 몫을 그대로 쓸 수 있다. 다음 소스로 넘어간다.
+            logger.warning(
+                "%s: 일일 호출 한도에 도달해 이 소스를 건너뜁니다", pipeline.name
+            )
+            failures.append(pipeline.name)
+        except Exception:
+            # 한 소스의 실패가 나머지 소스까지 막지 않도록 기록만 남기고 넘어간다.
+            # 적재가 멱등하므로 다음 실행에서 그대로 복구된다.
+            logger.exception("%s: 처리 실패", pipeline.name)
+            failures.append(pipeline.name)
+
+    logger.info(
+        "데이터 추출 작업 종료: 최근 %d개월, %d행 적재, %.1f분 소요",
+        collection_months,
+        total,
+        (time.monotonic() - started) / 60,
+    )
+    if failures:
+        logger.error("실패한 소스 %d건: %s", len(failures), ", ".join(failures))
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(run_data_extraction_job, "cron", hour=4, minute=0)
+    # 수집 대상이 국내 실거래가이고 수집 모듈도 KST 기준으로 대상 월을 정하므로,
+    # 스케줄도 서버 로컬 시간이 아닌 KST로 고정한다.
+    scheduler = AsyncIOScheduler(timezone=KST)
+    for job_id, day_of_week, collection_months in (
+        ("data_extraction_recent", RECENT_JOB_DAYS, RECENT_COLLECTION_MONTHS),
+        ("data_extraction_full", FULL_JOB_DAYS, FULL_COLLECTION_MONTHS),
+    ):
+        scheduler.add_job(
+            run_data_extraction_job,
+            "cron",
+            day_of_week=day_of_week,
+            hour=EXTRACTION_JOB_HOUR,
+            minute=EXTRACTION_JOB_MINUTE,
+            args=(collection_months,),
+            id=job_id,
+            # 한 번 도는 데 오래 걸리는 작업이라 다음 실행 시각을 넘길 수 있다. 겹쳐 돌면
+            # 같은 갱신 단위를 동시에 지우고 넣게 되므로 한 번에 하나만 돌린다.
+            max_instances=1,
+            coalesce=True,
+        )
     scheduler.start()
     try:
         yield
