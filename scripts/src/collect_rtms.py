@@ -12,8 +12,8 @@ import requests
 from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 from dotenv import load_dotenv
 
-RESULTS_DIR = Path(__file__).resolve().parent / "results"
-LEGAL_DONG_CODE_PATH = Path(__file__).resolve().parent / "results/legal_dong_code.json"
+RESULTS_DIR = Path(__file__).resolve().parents[1] / "results"
+LEGAL_DONG_CODE_PATH = RESULTS_DIR / "legal_dong_code.json"
 
 
 def _sanitize_path_segment(value: str) -> str:
