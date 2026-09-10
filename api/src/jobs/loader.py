@@ -33,20 +33,28 @@ class RawDataLoader(DataLoader):
         self.session = session
         self.model = model
         # id/created_at은 DB가 채우므로 적재 대상에서 제외한다.
-        self.columns = set(model.__table__.columns.keys()) - {"id", "created_at"}
+        self.columns = tuple(
+            column.name
+            for column in model.__table__.columns
+            if column.name not in {"id", "created_at"}
+        )
 
     async def load(self, rows: list[dict[str, Any]]) -> int:
+        # executemany는 모든 파라미터 dict의 키가 같아야 하므로, 모델에 없는 키를 버리는
+        # 것에 더해 응답에 빠진 컬럼도 None으로 채워 키 집합을 컬럼 전체로 고정한다.
         payload = [
-            {key: value for key, value in row.items() if key in self.columns}
+            {column: row.get(column) for column in self.columns}
             for row in rows
+            if any(key in self.columns for key in row)
         ]
-        payload = [row for row in payload if row]
         if not payload:
             return 0
 
         for start in range(0, len(payload), self.CHUNK_SIZE):
+            # 모델이 아니라 __table__을 넘긴다. 모델을 넘기면 ORM(bulk_persistence) 경로를
+            # 타서 처리량이 한 자릿수로 떨어진다(docs/temp/bulk-insert-compile-cache.md).
             await self.session.execute(
-                insert(self.model), payload[start : start + self.CHUNK_SIZE]
+                insert(self.model.__table__), payload[start : start + self.CHUNK_SIZE]
             )
 
         return len(payload)
