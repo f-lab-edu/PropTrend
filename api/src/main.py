@@ -9,7 +9,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
-from .db import dispose_engine
+from .db import create_tables, dispose_engine
 from .jobs.pipeline import DEFAULT_CONCURRENCY, DEFAULT_MONTHS
 from .jobs.runner import RefreshAlreadyRunning, RefreshRunner, RefreshState
 from .jobs.utils import KST
@@ -26,6 +26,10 @@ runner = RefreshRunner()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # 갱신이 첫 삽을 뜨기 전에 테이블이 있어야 한다. DB가 비어 있는 새 환경에서도
+    # 컴포즈만으로 뜨게 하려는 것이므로, 실패하면 그대로 기동을 멈춘다.
+    await create_tables()
+
     # 등록하는 작업은 하나뿐이다. 수집·적재·가공의 순서는 refresh_all 안의 await
     # 순서로 표현되며, 스케줄러는 "언제 시작할지"만 정한다. 단계를 개별 작업으로
     # 쪼개 등록하면 세션이 갈라져 삭제와 적재가 다른 트랜잭션이 된다.
