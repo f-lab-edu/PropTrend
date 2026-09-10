@@ -12,7 +12,7 @@ docs:
 - scripts/docs/data-api/legal-dong-code.md (getStanReginCdList)
 """
 
-from sqlalchemy import String
+from sqlalchemy import Index, String
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .base import Base, RawRecordMixin
@@ -20,6 +20,13 @@ from .base import Base, RawRecordMixin
 
 class RawApartSale(Base, RawRecordMixin):
     __tablename__ = "raw_apart_sale"
+
+    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
+    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
+    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
+    __table_args__ = (
+        Index("ix_raw_apart_sale_deal_year_sgg_cd", "dealYear", "sggCd"),
+    )
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(60))
@@ -45,6 +52,13 @@ class RawApartSale(Base, RawRecordMixin):
 
 class RawApartRent(Base, RawRecordMixin):
     __tablename__ = "raw_apart_rent"
+
+    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
+    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
+    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
+    __table_args__ = (
+        Index("ix_raw_apart_rent_deal_year_sgg_cd", "dealYear", "sggCd"),
+    )
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(30))
@@ -76,6 +90,13 @@ class RawApartRent(Base, RawRecordMixin):
 class RawOfficetelSale(Base, RawRecordMixin):
     __tablename__ = "raw_officetel_sale"
 
+    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
+    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
+    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
+    __table_args__ = (
+        Index("ix_raw_officetel_sale_deal_year_sgg_cd", "dealYear", "sggCd"),
+    )
+
     sggCd: Mapped[str | None] = mapped_column(String(5))
     sggNm: Mapped[str | None] = mapped_column(String(30))
     umdNm: Mapped[str | None] = mapped_column(String(60))
@@ -99,6 +120,13 @@ class RawOfficetelSale(Base, RawRecordMixin):
 class RawOfficetelRent(Base, RawRecordMixin):
     __tablename__ = "raw_officetel_rent"
 
+    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
+    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
+    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
+    __table_args__ = (
+        Index("ix_raw_officetel_rent_deal_year_sgg_cd", "dealYear", "sggCd"),
+    )
+
     sggCd: Mapped[str | None] = mapped_column(String(5))
     sggNm: Mapped[str | None] = mapped_column(String(30))
     umdNm: Mapped[str | None] = mapped_column(String(60))
@@ -121,6 +149,13 @@ class RawOfficetelRent(Base, RawRecordMixin):
 
 class RawMultiflexSale(Base, RawRecordMixin):
     __tablename__ = "raw_multiflex_sale"
+
+    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
+    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
+    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
+    __table_args__ = (
+        Index("ix_raw_multiflex_sale_deal_year_sgg_cd", "dealYear", "sggCd"),
+    )
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(60))
@@ -147,6 +182,13 @@ class RawMultiflexSale(Base, RawRecordMixin):
 class RawMultiflexRent(Base, RawRecordMixin):
     __tablename__ = "raw_multiflex_rent"
 
+    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
+    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
+    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
+    __table_args__ = (
+        Index("ix_raw_multiflex_rent_deal_year_sgg_cd", "dealYear", "sggCd"),
+    )
+
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(30))
     houseType: Mapped[str | None] = mapped_column(String(6))
@@ -170,6 +212,13 @@ class RawMultiflexRent(Base, RawRecordMixin):
 class RawSingleMultiFamilySale(Base, RawRecordMixin):
     __tablename__ = "raw_single_multi_family_sale"
 
+    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
+    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
+    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
+    __table_args__ = (
+        Index("ix_raw_single_multi_family_sale_deal_year_sgg_cd", "dealYear", "sggCd"),
+    )
+
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(60))
     houseType: Mapped[str | None] = mapped_column(String(6))
@@ -191,6 +240,13 @@ class RawSingleMultiFamilySale(Base, RawRecordMixin):
 
 class RawSingleMultiFamilyRent(Base, RawRecordMixin):
     __tablename__ = "raw_single_multi_family_rent"
+
+    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
+    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
+    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
+    __table_args__ = (
+        Index("ix_raw_single_multi_family_rent_deal_year_sgg_cd", "dealYear", "sggCd"),
+    )
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     houseType: Mapped[str | None] = mapped_column(String(6))

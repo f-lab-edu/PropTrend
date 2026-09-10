@@ -1,11 +1,27 @@
-"""공공 오픈API 응답을 수집해 raw 테이블에 적재하는 수집기 인터페이스."""
+"""수집기 인터페이스와 구현체."""
 
 import os
 import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, ClassVar
 
 import httpx
+from sqlalchemy import RowMapping, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from ..model import Base, PropertyType
+from ..model.raw import (
+    RawApartRent,
+    RawApartSale,
+    RawMultiflexRent,
+    RawMultiflexSale,
+    RawOfficetelRent,
+    RawOfficetelSale,
+    RawSingleMultiFamilyRent,
+    RawSingleMultiFamilySale,
+)
+from .utils import parse_deal_ymd
 
 
 class DataCollector(ABC):
@@ -17,16 +33,7 @@ class DataCollector(ABC):
 
 
 class LegalDongCodeCollector(DataCollector):
-    """행정안전부_행정표준코드_법정동코드(getStanReginCdList) 수집기.
-
-    전체 법정동 약 2만건을 페이지 단위로 모두 조회하되, 그중 시군구 단위 코드만
-    남긴다. 실거래가 API의 LAWD_CD는 법정동코드 10자리 중 앞 5자리(시군구)이고,
-    그 하위 읍면동/리 코드로는 자료가 조회되지 않는다(해당 거래가 상위 시군구
-    조회 결과에 모두 포함된다). 따라서 수집 대상으로 의미가 있는 행은 앞 5자리
-    뒤가 모두 0인 'SSGGG00000' 형태의 시군구 행뿐이다.
-
-    docs: scripts/docs/data-api/legal-dong-code.md
-    """
+    """행정안전부_행정표준코드_법정동코드(getStanReginCdList) 수집기."""
 
     API_URL = "https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList"
     MAX_ROWS_PER_PAGE = 1000  # 1회 요청 최대 건수(초과 시 에러코드 336)
@@ -49,17 +56,11 @@ class LegalDongCodeCollector(DataCollector):
                     break
                 page_no += 1
 
-        # 헤더 값은 마지막으로 받은 페이지의 것을 그대로 남긴다. totalCount는 필터링
-        # 전 전체 건수이므로 len(rows)와 다르다.
         return {**page, "rows": rows}
 
     @staticmethod
     def _is_sigungu(row: dict[str, Any]) -> bool:
-        """시군구 단위(SSGGG00000) 행인지 판별한다.
-
-        읍면동(umd_cd)·리(ri_cd)가 모두 0이어야 하고, 시군구(sgg_cd)가 0인 시도
-        단위 행(예: 1100000000 서울특별시)은 LAWD_CD로 쓸 수 없으므로 제외한다.
-        """
+        """시군구 단위(SSGGG00000) 행인지 판별한다."""
         return (
             row.get("sgg_cd") != "000"
             and row.get("umd_cd") == "000"
@@ -109,14 +110,7 @@ class LegalDongCodeCollector(DataCollector):
 
 
 class RtmsDataCollector(DataCollector):
-    """국토교통부 실거래가 오픈API(RTMSDataSvc*) 8종의 공통 수집기.
-
-    8개 API는 요청 파라미터(LAWD_CD/DEAL_YMD)와 응답 XML 구조가 모두 같고
-    엔드포인트만 다르므로, 하위 클래스는 API_URL만 지정한다.
-
-    수집 단위는 (지역코드 5자리, 계약년월 6자리) 하나이며, totalCount가 한
-    페이지를 넘으면 남은 페이지까지 이어서 조회해 item 전체를 모아 반환한다.
-    """
+    """국토교통부 실거래가 오픈API(RTMSDataSvc*) 8종의 공통 수집기."""
 
     API_URL: str
     MAX_ROWS_PER_PAGE = 10000
@@ -143,7 +137,6 @@ class RtmsDataCollector(DataCollector):
                     break
                 page_no += 1
 
-        # 헤더 값은 마지막으로 받은 페이지의 것을 그대로 남긴다.
         return {**page, "rows": rows}
 
     async def _fetch_page(
@@ -177,28 +170,19 @@ class RtmsDataCollector(DataCollector):
 
 
 class ApartSaleCollector(RtmsDataCollector):
-    """국토교통부_아파트 매매 실거래가 자료(getRTMSDataSvcAptTrade) 수집기.
-
-    docs: scripts/docs/data-api/apart-sale.md
-    """
+    """국토교통부_아파트 매매 실거래가 자료(getRTMSDataSvcAptTrade) 수집기."""
 
     API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"
 
 
 class ApartRentCollector(RtmsDataCollector):
-    """국토교통부_아파트 전월세 실거래가 자료(getRTMSDataSvcAptRent) 수집기.
-
-    docs: scripts/docs/data-api/apart-rent.md
-    """
+    """국토교통부_아파트 전월세 실거래가 자료(getRTMSDataSvcAptRent) 수집기."""
 
     API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcAptRent/getRTMSDataSvcAptRent"
 
 
 class OfficetelSaleCollector(RtmsDataCollector):
-    """국토교통부_오피스텔 매매 실거래가 자료(getRTMSDataSvcOffiTrade) 수집기.
-
-    docs: scripts/docs/data-api/officetel-sale.md
-    """
+    """국토교통부_오피스텔 매매 실거래가 자료(getRTMSDataSvcOffiTrade) 수집기."""
 
     API_URL = (
         "https://apis.data.go.kr/1613000/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"
@@ -206,10 +190,7 @@ class OfficetelSaleCollector(RtmsDataCollector):
 
 
 class OfficetelRentCollector(RtmsDataCollector):
-    """국토교통부_오피스텔 전월세 실거래가 자료(getRTMSDataSvcOffiRent) 수집기.
-
-    docs: scripts/docs/data-api/officetel-rent.md
-    """
+    """국토교통부_오피스텔 전월세 실거래가 자료(getRTMSDataSvcOffiRent) 수집기."""
 
     API_URL = (
         "https://apis.data.go.kr/1613000/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent"
@@ -217,47 +198,115 @@ class OfficetelRentCollector(RtmsDataCollector):
 
 
 class MultiflexSaleCollector(RtmsDataCollector):
-    """국토교통부_연립다세대 매매 실거래가 자료(getRTMSDataSvcRHTrade) 수집기.
-
-    docs: scripts/docs/data-api/multiflex-sale.md
-    """
+    """국토교통부_연립다세대 매매 실거래가 자료(getRTMSDataSvcRHTrade) 수집기."""
 
     API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade"
 
 
 class MultiflexRentCollector(RtmsDataCollector):
-    """국토교통부_연립다세대 전월세 실거래가 자료(getRTMSDataSvcRHRent) 수집기.
-
-    docs: scripts/docs/data-api/multiflex-rent.md
-    """
+    """국토교통부_연립다세대 전월세 실거래가 자료(getRTMSDataSvcRHRent) 수집기."""
 
     API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcRHRent/getRTMSDataSvcRHRent"
 
 
 class SingleMultiFamilySaleCollector(RtmsDataCollector):
-    """국토교통부_단독/다가구 매매 실거래가 자료(getRTMSDataSvcSHTrade) 수집기.
-
-    docs: scripts/docs/data-api/single-multi-family-sale.md
-    """
+    """국토교통부_단독/다가구 매매 실거래가 자료(getRTMSDataSvcSHTrade) 수집기."""
 
     API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade"
 
 
 class SingleMultiFamilyRentCollector(RtmsDataCollector):
-    """국토교통부_단독/다가구 전월세 실거래가 자료(getRTMSDataSvcSHRent) 수집기.
-
-    docs: scripts/docs/data-api/single-multi-family-rent.md
-    """
+    """국토교통부_단독/다가구 전월세 실거래가 자료(getRTMSDataSvcSHRent) 수집기."""
 
     API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcSHRent/getRTMSDataSvcSHRent"
 
 
-def _to_int(value: str | None) -> int:
-    """응답의 숫자 필드를 int로 바꾼다. 값이 없거나 숫자가 아니면 0으로 본다.
+class RawTableCollector:
+    """raw 테이블 하나에서 갱신 단위만큼 원본 행을 읽어오는 수집기."""
 
-    원본 API 문서/응답에 형식 오류가 잦아, 페이지 반복 조건 계산이 파싱 오류로
-    중단되지 않도록 방어한다.
-    """
+    model: ClassVar[type[Base]]
+    property_type: ClassVar[PropertyType]
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def collect(
+        self, deal_ymd: str, sgg_cd: str | None = None
+    ) -> Sequence[RowMapping]:
+        """(계약년월, 시군구) 단위의 원본 행을 모두 읽어 반환한다."""
+        year, month = parse_deal_ymd(deal_ymd)
+
+        table = self.model.__table__
+        conditions = [
+            table.c.dealYear == year,
+            # 원본 dealMonth는 "07"이 아니라 "7"로 들어온다.
+            func.lpad(table.c.dealMonth, 2, "0") == month,
+        ]
+        if sgg_cd is not None:
+            conditions.append(table.c.sggCd == sgg_cd)
+
+        result = await self.session.execute(select(table).where(*conditions))
+        return result.mappings().all()
+
+
+class RawApartSaleCollector(RawTableCollector):
+    """`raw_apart_sale`(아파트 매매)에서 읽는다."""
+
+    model = RawApartSale
+    property_type = PropertyType.APT
+
+
+class RawApartRentCollector(RawTableCollector):
+    """`raw_apart_rent`(아파트 전월세)에서 읽는다."""
+
+    model = RawApartRent
+    property_type = PropertyType.APT
+
+
+class RawOfficetelSaleCollector(RawTableCollector):
+    """`raw_officetel_sale`(오피스텔 매매)에서 읽는다."""
+
+    model = RawOfficetelSale
+    property_type = PropertyType.OFFICETEL
+
+
+class RawOfficetelRentCollector(RawTableCollector):
+    """`raw_officetel_rent`(오피스텔 전월세)에서 읽는다."""
+
+    model = RawOfficetelRent
+    property_type = PropertyType.OFFICETEL
+
+
+class RawMultiflexSaleCollector(RawTableCollector):
+    """`raw_multiflex_sale`(연립다세대 매매)에서 읽는다."""
+
+    model = RawMultiflexSale
+    property_type = PropertyType.ROW_HOUSE
+
+
+class RawMultiflexRentCollector(RawTableCollector):
+    """`raw_multiflex_rent`(연립다세대 전월세)에서 읽는다."""
+
+    model = RawMultiflexRent
+    property_type = PropertyType.ROW_HOUSE
+
+
+class RawSingleMultiFamilySaleCollector(RawTableCollector):
+    """`raw_single_multi_family_sale`(단독·다가구 매매)에서 읽는다."""
+
+    model = RawSingleMultiFamilySale
+    property_type = PropertyType.SINGLE_MULTI
+
+
+class RawSingleMultiFamilyRentCollector(RawTableCollector):
+    """`raw_single_multi_family_rent`(단독·다가구 전월세)에서 읽는다."""
+
+    model = RawSingleMultiFamilyRent
+    property_type = PropertyType.SINGLE_MULTI
+
+
+def _to_int(value: str | None) -> int:
+    """응답의 숫자 필드를 int로 바꾼다. 값이 없거나 숫자가 아니면 0으로 본다."""
     try:
         return int(value or 0)
     except ValueError:
