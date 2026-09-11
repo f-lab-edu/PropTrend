@@ -23,20 +23,20 @@ from ..model import (
     RawSingleMultiFamilyRent,
     RawSingleMultiFamilySale,
 )
-from . import collector as C
-from . import preprocessor as P
 from .cleaner import (
     RawTableCleaner,
     RentTransactionCleaner,
     SaleTransactionCleaner,
     TransactionCleaner,
 )
+from .collector import LegalDongCodeCollector, RawTableCollector, RtmsDataCollector
 from .loader import (
     RawDataLoader,
     RentTransactionLoader,
     SaleTransactionLoader,
     TransactionLoader,
 )
+from .preprocessor import RawTablePreprocessor, RentPreprocessor, SalePreprocessor
 from .utils import parse_deal_ymd, today_kst
 
 logger = logging.getLogger(__name__)
@@ -59,11 +59,11 @@ class PipelineSpec:
     # 건물명 컬럼 이름은 유형마다 다르고, 단독·다가구에는 아예 없다.
     building_name_field: str | None = None
 
-    preprocessor: ClassVar[type[P.RawTablePreprocessor]]
+    preprocessor: ClassVar[type[RawTablePreprocessor]]
     cleaner: ClassVar[type[TransactionCleaner]]
     loader: ClassVar[type[TransactionLoader]]
 
-    def build_preprocessor(self) -> P.RawTablePreprocessor:
+    def build_preprocessor(self) -> RawTablePreprocessor:
         """이 조합 전용 전처리기를 만든다."""
         return self.preprocessor(
             self.property_type,
@@ -76,7 +76,7 @@ class PipelineSpec:
 class SaleSpec(PipelineSpec):
     """매매 조합. 전처리기·정리기·적재기는 유형과 무관하므로 여기서 고정한다."""
 
-    preprocessor = P.SalePreprocessor
+    preprocessor = SalePreprocessor
     cleaner = SaleTransactionCleaner
     loader = SaleTransactionLoader
 
@@ -85,7 +85,7 @@ class SaleSpec(PipelineSpec):
 class RentSpec(PipelineSpec):
     """전월세 조합. 전처리기·정리기·적재기는 유형과 무관하므로 여기서 고정한다."""
 
-    preprocessor = P.RentPreprocessor
+    preprocessor = RentPreprocessor
     cleaner = RentTransactionCleaner
     loader = RentTransactionLoader
 
@@ -170,7 +170,7 @@ async def refresh_unit(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> UnitRe
     parse_deal_ymd(deal_ymd)  # API를 부르기 전에 형식부터 막는다.
 
     # 응답을 기다리는 동안 커넥션과 삭제 락을 쥐지 않도록 트랜잭션 밖에서 호출한다.
-    response = await C.RtmsDataCollector(spec.api_url, sgg_cd, deal_ymd).collect()
+    response = await RtmsDataCollector(spec.api_url, sgg_cd, deal_ymd).collect()
 
     async with session_scope() as session:
         raw_deleted = await RawTableCleaner(session, spec.raw_model).clean(deal_ymd, sgg_cd)
@@ -178,7 +178,7 @@ async def refresh_unit(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> UnitRe
 
         # 응답이 아니라 raw를 다시 읽는다. 적재 과정의 키 정리를 거친 모습이 필요하고,
         # 같은 트랜잭션이라 방금 넣은 행이 그대로 보인다.
-        rows = await C.RawTableCollector(session, spec.raw_model).collect(deal_ymd, sgg_cd)
+        rows = await RawTableCollector(session, spec.raw_model).collect(deal_ymd, sgg_cd)
         payload = spec.build_preprocessor().preprocess(rows)
 
         deleted = await spec.cleaner(session).clean(spec.property_type, deal_ymd, sgg_cd)
@@ -189,7 +189,7 @@ async def refresh_unit(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> UnitRe
 
 async def refresh_legal_dong_codes() -> int:
     """시군구 목록의 출처인 법정동코드를 통째로 갱신한다."""
-    response = await C.LegalDongCodeCollector().collect()
+    response = await LegalDongCodeCollector().collect()
     async with session_scope() as session:
         await session.execute(delete(RawLegalDongCode.__table__))
         loaded = await RawDataLoader(session, RawLegalDongCode).load(response["rows"])

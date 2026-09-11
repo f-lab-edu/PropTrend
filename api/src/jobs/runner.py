@@ -11,7 +11,7 @@ from .utils import KST
 logger = logging.getLogger(__name__)
 
 
-class RefreshAlreadyRunning(RuntimeError):
+class RefreshAlreadyRunningError(RuntimeError):
     """이미 갱신이 돌고 있어 새 실행을 시작할 수 없다."""
 
     def __init__(self, trigger: str | None, started_at: datetime | None) -> None:
@@ -70,13 +70,13 @@ class RefreshRunner:
         """예약 실행. 수동 실행과 겹치면 이번 회차를 건너뛴다."""
         try:
             await self.run("scheduler")
-        except RefreshAlreadyRunning as exc:
+        except RefreshAlreadyRunningError as exc:
             logger.warning("갱신이 이미 실행 중이라 예약 실행을 건너뛴다: %s", exc)
 
     def _mark_started(self, trigger: str) -> None:
         """실행 자리를 선점한다."""
         if self._state.running:
-            raise RefreshAlreadyRunning(self._state.trigger, self._state.started_at)
+            raise RefreshAlreadyRunningError(self._state.trigger, self._state.started_at)
         self._state = RefreshState(running=True, trigger=trigger, started_at=datetime.now(KST))
 
     async def _run(self, months: int, concurrency: int) -> None:

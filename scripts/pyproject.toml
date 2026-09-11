@@ -36,3 +36,7 @@ ignore = [
 [tool.ruff.lint.mccabe]
 # SonarCloud의 인지 복잡도 기본 임계값과 맞춘다.
 max-complexity = 15
+
+[tool.ruff.lint.per-file-ignores]
+# api 프로젝트를 sys.path에 올린 뒤에야 src.* 모듈을 임포트할 수 있다.
+"src/load_results.py" = ["E402"]

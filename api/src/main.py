@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 
 from .db import create_tables, dispose_engine
 from .jobs.pipeline import DEFAULT_CONCURRENCY, DEFAULT_MONTHS
-from .jobs.runner import RefreshAlreadyRunning, RefreshRunner, RefreshState
+from .jobs.runner import RefreshAlreadyRunningError, RefreshRunner, RefreshState
 from .jobs.utils import KST
 
 load_dotenv()
@@ -72,7 +72,7 @@ class RefreshStatus(BaseModel):
     error: str | None = None
 
     @classmethod
-    def of(cls, state: RefreshState) -> "RefreshStatus":
+    def of(cls, state: RefreshState) -> RefreshStatus:
         return cls(**vars(state))
 
 
@@ -91,7 +91,7 @@ async def trigger_refresh(request: RefreshRequest | None = None) -> RefreshStatu
     request = request or RefreshRequest()
     try:
         state = runner.start("manual", request.months, request.concurrency)
-    except RefreshAlreadyRunning as exc:
+    except RefreshAlreadyRunningError as exc:
         # 겹쳐 돌리면 같은 갱신 단위를 두 트랜잭션이 동시에 삭제·적재한다.
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     return RefreshStatus.of(state)

@@ -5,6 +5,7 @@ import sys
 import time
 import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -55,7 +56,18 @@ API_CONFIGS = [
 ]
 
 
-class DailyLimitReached(Exception):
+@dataclass(frozen=True)
+class PageRequest:
+    """한 (지역, 계약년월)의 페이지를 끝까지 넘기는 동안 고정되는 요청 대상."""
+
+    session: requests.Session
+    base_url: str
+    service_key: str
+    region_code: str
+    yyyymm: str
+
+
+class DailyLimitReachedError(Exception):
     pass
 
 
@@ -186,18 +198,11 @@ def _retry_or_raise(attempt: int, error_message: str, cause: Exception | None = 
     time.sleep(RETRY_BACKOFF_SECONDS * attempt)
 
 
-def fetch_page_with_retry(
-    session: requests.Session,
-    base_url: str,
-    service_key: str,
-    region_code: str,
-    yyyymm: str,
-    page_no: int,
-) -> tuple[str, str, list[dict], int]:
+def fetch_page_with_retry(request: PageRequest, page_no: int) -> tuple[str, str, list[dict], int]:
     params = {
-        "serviceKey": service_key,
-        "LAWD_CD": region_code,
-        "DEAL_YMD": yyyymm,
+        "serviceKey": request.service_key,
+        "LAWD_CD": request.region_code,
+        "DEAL_YMD": request.yyyymm,
         "pageNo": page_no,
         "numOfRows": MAX_ROWS_PER_PAGE,
     }
@@ -206,7 +211,7 @@ def fetch_page_with_retry(
     while True:
         attempt += 1
         try:
-            response = session.get(base_url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
+            response = request.session.get(request.base_url, params=params, timeout=REQUEST_TIMEOUT_SECONDS)
             response.raise_for_status()
             root = safe_xml_fromstring(response.text)
             result_code, result_msg, items, total_count = parse_response(root)
@@ -214,12 +219,12 @@ def fetch_page_with_retry(
             _retry_or_raise(attempt, f"네트워크/파싱 오류가 반복되어 중단합니다: {exc}", exc)
             continue
 
-        if result_code == SUCCESS_RESULT_CODE or result_code == NO_DATA_RESULT_CODE:
+        if result_code in (SUCCESS_RESULT_CODE, NO_DATA_RESULT_CODE):
             time.sleep(REQUEST_DELAY_SECONDS)
             return result_code, result_msg, items, total_count
 
         if result_code == DAILY_LIMIT_RESULT_CODE:
-            raise DailyLimitReached(result_msg)
+            raise DailyLimitReachedError(result_msg)
 
         if result_code in TRANSIENT_RESULT_CODES:
             _retry_or_raise(attempt, f"API 오류 {result_code}: {result_msg}")
@@ -228,17 +233,9 @@ def fetch_page_with_retry(
         raise FatalApiError(f"API 오류 {result_code}: {result_msg}")
 
 
-def fetch_all_items_for_region_month(
-    session: requests.Session,
-    base_url: str,
-    service_key: str,
-    region_code: str,
-    yyyymm: str,
-) -> tuple[str, str, list[dict]]:
+def fetch_all_items_for_region_month(request: PageRequest) -> tuple[str, str, list[dict]]:
     page_no = 1
-    result_code, result_msg, items, total_count = fetch_page_with_retry(
-        session, base_url, service_key, region_code, yyyymm, page_no
-    )
+    result_code, result_msg, items, total_count = fetch_page_with_retry(request, page_no)
 
     if result_code == NO_DATA_RESULT_CODE:
         return result_code, result_msg, []
@@ -246,9 +243,7 @@ def fetch_all_items_for_region_month(
     all_items = list(items)
     while page_no * MAX_ROWS_PER_PAGE < total_count:
         page_no += 1
-        result_code, result_msg, items, total_count = fetch_page_with_retry(
-            session, base_url, service_key, region_code, yyyymm, page_no
-        )
+        result_code, result_msg, items, total_count = fetch_page_with_retry(request, page_no)
         all_items.extend(items)
 
     return result_code, result_msg, all_items
@@ -275,8 +270,8 @@ def load_partial_items(api_id: str, yyyymm: str) -> list[dict]:
         return []
 
     by_region: dict[str, list[dict]] = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        line = line.strip()
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
         if not line:
             continue
         entry = json.loads(line)
@@ -340,10 +335,10 @@ def run_collector(api_id: str, base_url: str, service_key: str) -> dict:
                 month_items = load_partial_items(api_id, yyyymm)
 
             try:
-                result_code, result_msg, items = fetch_all_items_for_region_month(
-                    session, base_url, service_key, region_code, yyyymm
+                _result_code, _result_msg, items = fetch_all_items_for_region_month(
+                    PageRequest(session, base_url, service_key, region_code, yyyymm)
                 )
-            except DailyLimitReached:
+            except DailyLimitReachedError:
                 print(
                     f"[{api_id}] 일일 호출 제한에 도달했습니다. "
                     f"다음 실행 시 이어서 진행합니다. "
@@ -384,7 +379,7 @@ def main() -> None:
             api_id = futures[future]
             try:
                 results.append(future.result())
-            except Exception as exc:  # unexpected bug, not an API/network error
+            except Exception as exc:  # noqa: BLE001 - 워커의 예기치 못한 버그를 요약에 남기고 계속 진행한다
                 print(f"[{api_id}] 예상치 못한 오류로 중단되었습니다: {exc}", file=sys.stderr)
                 results.append({"api_id": api_id, "status": "unexpected_error", "completed": 0, "error": str(exc)})
 

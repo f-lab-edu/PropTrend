@@ -37,9 +37,8 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 @asynccontextmanager
 async def session_scope() -> AsyncIterator[AsyncSession]:
     """데이터베이스 세션 제공 함수"""
-    async with get_session_factory()() as session:
-        async with session.begin():
-            yield session
+    async with get_session_factory()() as session, session.begin():
+        yield session
 
 
 async def get_session() -> AsyncIterator[AsyncSession]:
