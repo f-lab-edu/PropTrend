@@ -1,38 +1,19 @@
-"""수집기 인터페이스와 구현체."""
+"""오픈API와 raw 테이블에서 데이터를 읽어오는 수집기."""
 
 import os
 import xml.etree.ElementTree as ET
-from abc import ABC, abstractmethod
 from collections.abc import Sequence
-from typing import Any, ClassVar
+from typing import Any
 
 import httpx
 from sqlalchemy import RowMapping, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..model import Base, PropertyType
-from ..model.raw import (
-    RawApartRent,
-    RawApartSale,
-    RawMultiflexRent,
-    RawMultiflexSale,
-    RawOfficetelRent,
-    RawOfficetelSale,
-    RawSingleMultiFamilyRent,
-    RawSingleMultiFamilySale,
-)
+from ..model import Base
 from .utils import parse_deal_ymd
 
 
-class DataCollector(ABC):
-    """API 하나의 수집 작업을 담당하는 인터페이스."""
-
-    @abstractmethod
-    async def collect(self) -> dict[str, Any]:
-        """API를 호출하고 응답을 dict로 변환해 반환한다."""
-
-
-class LegalDongCodeCollector(DataCollector):
+class LegalDongCodeCollector:
     """행정안전부_행정표준코드_법정동코드(getStanReginCdList) 수집기."""
 
     API_URL = "https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList"
@@ -109,15 +90,15 @@ class LegalDongCodeCollector(DataCollector):
         }
 
 
-class RtmsDataCollector(DataCollector):
-    """국토교통부 실거래가 오픈API(RTMSDataSvc*) 8종의 공통 수집기."""
+class RtmsDataCollector:
+    """국토교통부 실거래가 오픈API(RTMSDataSvc*) 8종의 공통 수집기. URL만 갈아 끼운다."""
 
-    API_URL: str
     MAX_ROWS_PER_PAGE = 10000
     TIMEOUT = 10
     SUCCESS_RESULT_CODE = "000"
 
-    def __init__(self, lawd_cd: str, deal_ymd: str) -> None:
+    def __init__(self, api_url: str, lawd_cd: str, deal_ymd: str) -> None:
+        self.api_url = api_url
         self.lawd_cd = lawd_cd
         self.deal_ymd = deal_ymd
 
@@ -149,7 +130,7 @@ class RtmsDataCollector(DataCollector):
             "pageNo": page_no,
             "numOfRows": self.MAX_ROWS_PER_PAGE,
         }
-        response = await client.get(self.API_URL, params=params)
+        response = await client.get(self.api_url, params=params)
         response.raise_for_status()
 
         root = ET.fromstring(response.text)
@@ -169,66 +150,12 @@ class RtmsDataCollector(DataCollector):
         }
 
 
-class ApartSaleCollector(RtmsDataCollector):
-    """국토교통부_아파트 매매 실거래가 자료(getRTMSDataSvcAptTrade) 수집기."""
-
-    API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"
-
-
-class ApartRentCollector(RtmsDataCollector):
-    """국토교통부_아파트 전월세 실거래가 자료(getRTMSDataSvcAptRent) 수집기."""
-
-    API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcAptRent/getRTMSDataSvcAptRent"
-
-
-class OfficetelSaleCollector(RtmsDataCollector):
-    """국토교통부_오피스텔 매매 실거래가 자료(getRTMSDataSvcOffiTrade) 수집기."""
-
-    API_URL = (
-        "https://apis.data.go.kr/1613000/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"
-    )
-
-
-class OfficetelRentCollector(RtmsDataCollector):
-    """국토교통부_오피스텔 전월세 실거래가 자료(getRTMSDataSvcOffiRent) 수집기."""
-
-    API_URL = (
-        "https://apis.data.go.kr/1613000/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent"
-    )
-
-
-class MultiflexSaleCollector(RtmsDataCollector):
-    """국토교통부_연립다세대 매매 실거래가 자료(getRTMSDataSvcRHTrade) 수집기."""
-
-    API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade"
-
-
-class MultiflexRentCollector(RtmsDataCollector):
-    """국토교통부_연립다세대 전월세 실거래가 자료(getRTMSDataSvcRHRent) 수집기."""
-
-    API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcRHRent/getRTMSDataSvcRHRent"
-
-
-class SingleMultiFamilySaleCollector(RtmsDataCollector):
-    """국토교통부_단독/다가구 매매 실거래가 자료(getRTMSDataSvcSHTrade) 수집기."""
-
-    API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade"
-
-
-class SingleMultiFamilyRentCollector(RtmsDataCollector):
-    """국토교통부_단독/다가구 전월세 실거래가 자료(getRTMSDataSvcSHRent) 수집기."""
-
-    API_URL = "https://apis.data.go.kr/1613000/RTMSDataSvcSHRent/getRTMSDataSvcSHRent"
-
-
 class RawTableCollector:
     """raw 테이블 하나에서 갱신 단위만큼 원본 행을 읽어오는 수집기."""
 
-    model: ClassVar[type[Base]]
-    property_type: ClassVar[PropertyType]
-
-    def __init__(self, session: AsyncSession) -> None:
+    def __init__(self, session: AsyncSession, model: type[Base]) -> None:
         self.session = session
+        self.model = model
 
     async def collect(
         self, deal_ymd: str, sgg_cd: str | None = None
@@ -247,62 +174,6 @@ class RawTableCollector:
 
         result = await self.session.execute(select(table).where(*conditions))
         return result.mappings().all()
-
-
-class RawApartSaleCollector(RawTableCollector):
-    """`raw_apart_sale`(아파트 매매)에서 읽는다."""
-
-    model = RawApartSale
-    property_type = PropertyType.APT
-
-
-class RawApartRentCollector(RawTableCollector):
-    """`raw_apart_rent`(아파트 전월세)에서 읽는다."""
-
-    model = RawApartRent
-    property_type = PropertyType.APT
-
-
-class RawOfficetelSaleCollector(RawTableCollector):
-    """`raw_officetel_sale`(오피스텔 매매)에서 읽는다."""
-
-    model = RawOfficetelSale
-    property_type = PropertyType.OFFICETEL
-
-
-class RawOfficetelRentCollector(RawTableCollector):
-    """`raw_officetel_rent`(오피스텔 전월세)에서 읽는다."""
-
-    model = RawOfficetelRent
-    property_type = PropertyType.OFFICETEL
-
-
-class RawMultiflexSaleCollector(RawTableCollector):
-    """`raw_multiflex_sale`(연립다세대 매매)에서 읽는다."""
-
-    model = RawMultiflexSale
-    property_type = PropertyType.ROW_HOUSE
-
-
-class RawMultiflexRentCollector(RawTableCollector):
-    """`raw_multiflex_rent`(연립다세대 전월세)에서 읽는다."""
-
-    model = RawMultiflexRent
-    property_type = PropertyType.ROW_HOUSE
-
-
-class RawSingleMultiFamilySaleCollector(RawTableCollector):
-    """`raw_single_multi_family_sale`(단독·다가구 매매)에서 읽는다."""
-
-    model = RawSingleMultiFamilySale
-    property_type = PropertyType.SINGLE_MULTI
-
-
-class RawSingleMultiFamilyRentCollector(RawTableCollector):
-    """`raw_single_multi_family_rent`(단독·다가구 전월세)에서 읽는다."""
-
-    model = RawSingleMultiFamilyRent
-    property_type = PropertyType.SINGLE_MULTI
 
 
 def _to_int(value: str | None) -> int:

@@ -1,10 +1,10 @@
-"""raw 테이블 행을 정제 테이블 컬럼으로 바꾸는 전처리기 인터페이스와 구현체."""
+"""raw 테이블 행을 정제 테이블 컬럼으로 바꾸는 전처리기."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any, ClassVar
+from typing import Any
 
 from sqlalchemy import RowMapping
 
@@ -22,20 +22,18 @@ ROAD_ADDRESS_FIELDS = (
 )
 
 
-class DataPreprocessor(ABC):
-    """원본 행 목록을 적재 가능한 row 목록으로 바꾸는 인터페이스."""
+class RawTablePreprocessor(ABC):
+    """raw 테이블 8종의 공통 변환기. 유형별 차이는 건물명 필드뿐이라 주입받는다."""
 
-    @abstractmethod
-    def preprocess(self, rows: Sequence[RowMapping]) -> list[dict[str, Any]]:
-        """원본 행을 대상 컬럼명 dict 목록으로 바꿔 반환한다."""
-
-
-class RawTablePreprocessor(DataPreprocessor):
-    """raw 테이블 8종의 공통 변환기. 하위 클래스는 유형과 건물명 필드만 지정한다."""
-
-    property_type: ClassVar[PropertyType]
-    building_name_field: ClassVar[str | None] = None
-    table_name: ClassVar[str]
+    def __init__(
+        self,
+        property_type: PropertyType,
+        table_name: str,
+        building_name_field: str | None = None,
+    ) -> None:
+        self.property_type = property_type
+        self.table_name = table_name
+        self.building_name_field = building_name_field
 
     def preprocess(self, rows: Sequence[RowMapping]) -> list[dict[str, Any]]:
         """raw 행을 정제 테이블 컬럼명 dict 목록으로 바꾼다."""
@@ -77,9 +75,9 @@ class RawTablePreprocessor(DataPreprocessor):
             "total_floor_area": _decimal(row.get("totalFloorAr")),
         }
 
+    @abstractmethod
     def _specific(self, row: RowMapping) -> dict[str, Any]:
         """매매/전월세 각각의 고유 컬럼을 채운다."""
-        raise NotImplementedError
 
 
 class SalePreprocessor(RawTablePreprocessor):
@@ -120,68 +118,6 @@ class RentPreprocessor(RawTablePreprocessor):
             "apartment_serial_number": _text(row.get("aptSeq")),
             "road_address_detail": _road_address(row),
         }
-
-
-class ApartSalePreprocessor(SalePreprocessor):
-    """`raw_apart_sale`(아파트 매매)을 가공한다."""
-
-    table_name = "raw_apart_sale"
-    property_type = PropertyType.APT
-    building_name_field = "aptNm"
-
-
-class OfficetelSalePreprocessor(SalePreprocessor):
-    """`raw_officetel_sale`(오피스텔 매매)을 가공한다."""
-
-    table_name = "raw_officetel_sale"
-    property_type = PropertyType.OFFICETEL
-    building_name_field = "offiNm"
-
-
-class MultiflexSalePreprocessor(SalePreprocessor):
-    """`raw_multiflex_sale`(연립다세대 매매)을 가공한다."""
-
-    table_name = "raw_multiflex_sale"
-    property_type = PropertyType.ROW_HOUSE
-    building_name_field = "mhouseNm"
-
-
-class SingleMultiFamilySalePreprocessor(SalePreprocessor):
-    """`raw_single_multi_family_sale`(단독·다가구 매매)을 가공한다. 건물명이 없다."""
-
-    table_name = "raw_single_multi_family_sale"
-    property_type = PropertyType.SINGLE_MULTI
-
-
-class ApartRentPreprocessor(RentPreprocessor):
-    """`raw_apart_rent`(아파트 전월세)를 가공한다."""
-
-    table_name = "raw_apart_rent"
-    property_type = PropertyType.APT
-    building_name_field = "aptNm"
-
-
-class OfficetelRentPreprocessor(RentPreprocessor):
-    """`raw_officetel_rent`(오피스텔 전월세)를 가공한다."""
-
-    table_name = "raw_officetel_rent"
-    property_type = PropertyType.OFFICETEL
-    building_name_field = "offiNm"
-
-
-class MultiflexRentPreprocessor(RentPreprocessor):
-    """`raw_multiflex_rent`(연립다세대 전월세)를 가공한다."""
-
-    table_name = "raw_multiflex_rent"
-    property_type = PropertyType.ROW_HOUSE
-    building_name_field = "mhouseNm"
-
-
-class SingleMultiFamilyRentPreprocessor(RentPreprocessor):
-    """`raw_single_multi_family_rent`(단독·다가구 전월세)를 가공한다. 건물명이 없다."""
-
-    table_name = "raw_single_multi_family_rent"
-    property_type = PropertyType.SINGLE_MULTI
 
 
 def _text(value: str | None) -> str | None:

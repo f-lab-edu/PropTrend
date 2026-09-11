@@ -1,6 +1,5 @@
-"""가공을 마친 row를 테이블에 적재하는 적재기 인터페이스와 구현체."""
+"""가공을 마친 row를 테이블에 적재하는 적재기."""
 
-from abc import ABC, abstractmethod
 from typing import Any, ClassVar
 
 from sqlalchemy import insert
@@ -9,15 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..model import Base, RentTransaction, SaleTransaction
 
 
-class DataLoader(ABC):
-    """수집기가 넘긴 row 목록을 저장소에 적재하는 인터페이스."""
-
-    @abstractmethod
-    async def load(self, rows: list[dict[str, Any]]) -> int:
-        """row 목록을 적재하고 적재한 건수를 반환한다."""
-
-
-class RawDataLoader(DataLoader):
+class RawDataLoader:
     """API 응답 필드명을 그대로 컬럼으로 갖는 raw 테이블 공용 적재기."""
 
     CHUNK_SIZE = 1000
@@ -50,7 +41,7 @@ class RawDataLoader(DataLoader):
         return len(payload)
 
 
-class TransactionLoader(DataLoader):
+class TransactionLoader:
     """전처리기가 넘긴 row를 정제 테이블에 적재한다."""
 
     CHUNK_SIZE = 1000

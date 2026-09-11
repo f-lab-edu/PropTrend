@@ -50,99 +50,104 @@ DEFAULT_CONCURRENCY = 4
 
 @dataclass(frozen=True)
 class PipelineSpec:
-    """유형 × 매매/전월세 조합 하나가 쓰는 클래스들을 묶는다."""
+    """유형 × 매매/전월세 조합 하나의 설정을 묶는다. 유형과 대상 테이블이 여기에만 적힌다."""
 
     name: str
     property_type: PropertyType
-    api_collector: type[C.RtmsDataCollector]
+    api_url: str
     raw_model: type[Base]
-    raw_collector: type[C.RawTableCollector]
-    preprocessor: type[P.RawTablePreprocessor]
+    # 건물명 컬럼 이름은 유형마다 다르고, 단독·다가구에는 아예 없다.
+    building_name_field: str | None = None
 
+    preprocessor: ClassVar[type[P.RawTablePreprocessor]]
     cleaner: ClassVar[type[TransactionCleaner]]
     loader: ClassVar[type[TransactionLoader]]
+
+    def build_preprocessor(self) -> P.RawTablePreprocessor:
+        """이 조합 전용 전처리기를 만든다."""
+        return self.preprocessor(
+            self.property_type,
+            self.raw_model.__tablename__,
+            self.building_name_field,
+        )
 
 
 @dataclass(frozen=True)
 class SaleSpec(PipelineSpec):
-    """매매 조합. 정리기·적재기는 유형과 무관하므로 여기서 고정한다."""
+    """매매 조합. 전처리기·정리기·적재기는 유형과 무관하므로 여기서 고정한다."""
 
+    preprocessor = P.SalePreprocessor
     cleaner = SaleTransactionCleaner
     loader = SaleTransactionLoader
 
 
 @dataclass(frozen=True)
 class RentSpec(PipelineSpec):
-    """전월세 조합. 정리기·적재기는 유형과 무관하므로 여기서 고정한다."""
+    """전월세 조합. 전처리기·정리기·적재기는 유형과 무관하므로 여기서 고정한다."""
 
+    preprocessor = P.RentPreprocessor
     cleaner = RentTransactionCleaner
     loader = RentTransactionLoader
 
+
+# 실거래가 오픈API 8종은 같은 서비스(1613000) 아래 오퍼레이션 이름만 다르다.
+RTMS_API = "https://apis.data.go.kr/1613000"
 
 PIPELINES: tuple[PipelineSpec, ...] = (
     SaleSpec(
         "아파트 매매",
         PropertyType.APT,
-        C.ApartSaleCollector,
+        f"{RTMS_API}/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade",
         RawApartSale,
-        C.RawApartSaleCollector,
-        P.ApartSalePreprocessor,
+        "aptNm",
     ),
     RentSpec(
         "아파트 전월세",
         PropertyType.APT,
-        C.ApartRentCollector,
+        f"{RTMS_API}/RTMSDataSvcAptRent/getRTMSDataSvcAptRent",
         RawApartRent,
-        C.RawApartRentCollector,
-        P.ApartRentPreprocessor,
+        "aptNm",
     ),
     SaleSpec(
         "오피스텔 매매",
         PropertyType.OFFICETEL,
-        C.OfficetelSaleCollector,
+        f"{RTMS_API}/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade",
         RawOfficetelSale,
-        C.RawOfficetelSaleCollector,
-        P.OfficetelSalePreprocessor,
+        "offiNm",
     ),
     RentSpec(
         "오피스텔 전월세",
         PropertyType.OFFICETEL,
-        C.OfficetelRentCollector,
+        f"{RTMS_API}/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent",
         RawOfficetelRent,
-        C.RawOfficetelRentCollector,
-        P.OfficetelRentPreprocessor,
+        "offiNm",
     ),
     SaleSpec(
         "연립다세대 매매",
         PropertyType.ROW_HOUSE,
-        C.MultiflexSaleCollector,
+        f"{RTMS_API}/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade",
         RawMultiflexSale,
-        C.RawMultiflexSaleCollector,
-        P.MultiflexSalePreprocessor,
+        "mhouseNm",
     ),
     RentSpec(
         "연립다세대 전월세",
         PropertyType.ROW_HOUSE,
-        C.MultiflexRentCollector,
+        f"{RTMS_API}/RTMSDataSvcRHRent/getRTMSDataSvcRHRent",
         RawMultiflexRent,
-        C.RawMultiflexRentCollector,
-        P.MultiflexRentPreprocessor,
+        "mhouseNm",
     ),
+    # 단독·다가구는 건물명 컬럼이 없다.
     SaleSpec(
         "단독다가구 매매",
         PropertyType.SINGLE_MULTI,
-        C.SingleMultiFamilySaleCollector,
+        f"{RTMS_API}/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade",
         RawSingleMultiFamilySale,
-        C.RawSingleMultiFamilySaleCollector,
-        P.SingleMultiFamilySalePreprocessor,
     ),
     RentSpec(
         "단독다가구 전월세",
         PropertyType.SINGLE_MULTI,
-        C.SingleMultiFamilyRentCollector,
+        f"{RTMS_API}/RTMSDataSvcSHRent/getRTMSDataSvcSHRent",
         RawSingleMultiFamilyRent,
-        C.RawSingleMultiFamilyRentCollector,
-        P.SingleMultiFamilyRentPreprocessor,
     ),
 )
 
@@ -165,7 +170,7 @@ async def refresh_unit(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> UnitRe
     parse_deal_ymd(deal_ymd)  # API를 부르기 전에 형식부터 막는다.
 
     # 응답을 기다리는 동안 커넥션과 삭제 락을 쥐지 않도록 트랜잭션 밖에서 호출한다.
-    response = await spec.api_collector(sgg_cd, deal_ymd).collect()
+    response = await C.RtmsDataCollector(spec.api_url, sgg_cd, deal_ymd).collect()
 
     async with session_scope() as session:
         raw_deleted = await RawTableCleaner(session, spec.raw_model).clean(
@@ -175,8 +180,10 @@ async def refresh_unit(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> UnitRe
 
         # 응답이 아니라 raw를 다시 읽는다. 적재 과정의 키 정리를 거친 모습이 필요하고,
         # 같은 트랜잭션이라 방금 넣은 행이 그대로 보인다.
-        rows = await spec.raw_collector(session).collect(deal_ymd, sgg_cd)
-        payload = spec.preprocessor().preprocess(rows)
+        rows = await C.RawTableCollector(session, spec.raw_model).collect(
+            deal_ymd, sgg_cd
+        )
+        payload = spec.build_preprocessor().preprocess(rows)
 
         deleted = await spec.cleaner(session).clean(
             spec.property_type, deal_ymd, sgg_cd

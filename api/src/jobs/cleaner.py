@@ -1,6 +1,5 @@
 """재적재에 앞서 갱신 단위의 기존 데이터를 지우는 정리기."""
 
-from abc import ABC, abstractmethod
 from typing import ClassVar
 
 from sqlalchemy import delete, func
@@ -10,17 +9,7 @@ from ..model import Base, PropertyType, RentTransaction, SaleTransaction
 from .utils import month_range, parse_deal_ymd, split_sgg_cd
 
 
-class DataCleaner(ABC):
-    """갱신 단위 1건에 해당하는 기존 행을 지우는 인터페이스."""
-
-    @abstractmethod
-    async def clean(
-        self, property_type: PropertyType, deal_ymd: str, sgg_cd: str | None = None
-    ) -> int:
-        """갱신 단위의 기존 행을 지우고 지운 건수를 반환한다."""
-
-
-class TransactionCleaner(DataCleaner):
+class TransactionCleaner:
     """정제 테이블에서 갱신 단위 1건을 지운다."""
 
     model: ClassVar[type[Base]]
@@ -57,10 +46,12 @@ class RentTransactionCleaner(TransactionCleaner):
     model = RentTransaction
 
 
-# raw에는 property_type 컬럼이 없고 테이블 자체가 유형을 나타내므로 DataCleaner와
-# 시그니처가 맞지 않아 상속하지 않는다.
 class RawTableCleaner:
-    """raw 테이블에서 (계약년월, 시군구) 구간을 지운다."""
+    """raw 테이블에서 (계약년월, 시군구) 구간을 지운다.
+
+    raw에는 property_type 컬럼이 없고 테이블 자체가 유형을 나타내서, 정제 테이블
+    정리기와 시그니처가 다르다.
+    """
 
     def __init__(self, session: AsyncSession, model: type[Base]) -> None:
         self.session = session
