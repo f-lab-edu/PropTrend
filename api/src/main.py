@@ -26,21 +26,13 @@ runner = RefreshRunner()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    # 갱신이 첫 삽을 뜨기 전에 테이블이 있어야 한다. DB가 비어 있는 새 환경에서도
-    # 컴포즈만으로 뜨게 하려는 것이므로, 실패하면 그대로 기동을 멈춘다.
     await create_tables()
 
-    # 등록하는 작업은 하나뿐이다. 수집·적재·가공의 순서는 refresh_all 안의 await
-    # 순서로 표현되며, 스케줄러는 "언제 시작할지"만 정한다. 단계를 개별 작업으로
-    # 쪼개 등록하면 세션이 갈라져 삭제와 적재가 다른 트랜잭션이 된다.
     scheduler.add_job(
         runner.run_scheduled,
         CronTrigger(hour=3, minute=0, timezone=KST),
         id="refresh_all",
-        name="실거래가 수집 → raw 적재 → 정제 갱신",
-        # 하루치가 24시간 안에 끝나지 않아도 다음 실행이 겹치지 않게 한다. 겹치면
-        # 같은 갱신 단위를 두 트랜잭션이 동시에 삭제·적재한다. 수동 실행과의
-        # 겹침은 스케줄러가 모르므로 runner가 따로 막는다.
+        name="부동산 실거래 데이터 갱신 작업",
         max_instances=1,
         coalesce=True,
         misfire_grace_time=3600,
@@ -67,7 +59,6 @@ class RefreshRequest(BaseModel):
         DEFAULT_CONCURRENCY,
         ge=1,
         le=8,
-        # 단위마다 세션을 하나씩 쓰므로 커넥션 풀 크기를 넘기면 대기만 길어진다.
         description="동시에 처리할 갱신 단위 수",
     )
 
