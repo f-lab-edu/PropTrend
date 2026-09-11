@@ -1,11 +1,11 @@
 """오픈API와 raw 테이블에서 데이터를 읽어오는 수집기."""
 
 import os
-import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from typing import Any
 
 import httpx
+from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 from sqlalchemy import RowMapping, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -55,7 +55,7 @@ class LegalDongCodeCollector:
         response = await client.get(self.API_URL, params=params)
         response.raise_for_status()
 
-        root = ET.fromstring(response.text)
+        root = safe_xml_fromstring(response.text)
 
         head = root.find("./head")
         result = head.find("./RESULT") if head is not None else None
@@ -116,7 +116,7 @@ class RtmsDataCollector:
         response = await client.get(self.api_url, params=params)
         response.raise_for_status()
 
-        root = ET.fromstring(response.text)
+        root = safe_xml_fromstring(response.text)
 
         rows = [
             {field.tag: (field.text.strip() if field.text else None) for field in item}

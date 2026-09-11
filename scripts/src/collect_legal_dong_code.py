@@ -4,6 +4,7 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import requests
+from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 from dotenv import load_dotenv
 
 API_URL = "https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList"
@@ -22,7 +23,7 @@ def fetch_page(service_key: str, page_no: int) -> ET.Element:
     }
     response = requests.get(API_URL, params=params, timeout=10)
     response.raise_for_status()
-    root = ET.fromstring(response.text)
+    root = safe_xml_fromstring(response.text)
 
     result_code = root.findtext("./head/RESULT/resultCode") or root.findtext("./resultCode")
     result_msg = root.findtext("./head/RESULT/resultMsg") or root.findtext("./resultMsg")
