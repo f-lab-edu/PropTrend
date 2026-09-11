@@ -12,9 +12,14 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --locked --no-dev
+RUN uv sync --locked --no-dev --no-build
 
 COPY src ./src
+
+# 컨테이너를 root로 돌리면 탈출 시 호스트 권한까지 넘어간다.
+RUN useradd --system --no-create-home --uid 10001 appuser \
+    && chown -R appuser:appuser /app
+USER appuser
 
 EXPOSE 8000
 

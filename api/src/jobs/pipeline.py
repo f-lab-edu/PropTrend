@@ -76,18 +76,18 @@ class PipelineSpec:
 class SaleSpec(PipelineSpec):
     """매매 조합. 전처리기·정리기·적재기는 유형과 무관하므로 여기서 고정한다."""
 
-    preprocessor = SalePreprocessor
-    cleaner = SaleTransactionCleaner
-    loader = SaleTransactionLoader
+    preprocessor: ClassVar[type[RawTablePreprocessor]] = SalePreprocessor
+    cleaner: ClassVar[type[TransactionCleaner]] = SaleTransactionCleaner
+    loader: ClassVar[type[TransactionLoader]] = SaleTransactionLoader
 
 
 @dataclass(frozen=True)
 class RentSpec(PipelineSpec):
     """전월세 조합. 전처리기·정리기·적재기는 유형과 무관하므로 여기서 고정한다."""
 
-    preprocessor = RentPreprocessor
-    cleaner = RentTransactionCleaner
-    loader = RentTransactionLoader
+    preprocessor: ClassVar[type[RawTablePreprocessor]] = RentPreprocessor
+    cleaner: ClassVar[type[TransactionCleaner]] = RentTransactionCleaner
+    loader: ClassVar[type[TransactionLoader]] = RentTransactionLoader
 
 
 # 실거래가 오픈API 8종은 같은 서비스(1613000) 아래 오퍼레이션 이름만 다르다.
