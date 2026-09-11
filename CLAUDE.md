@@ -4,6 +4,7 @@
 
 - 코드 포맷팅: `ruff format .`
 - 코드 린팅: `ruff check --fix .`
+- 전체 검사(포맷·린트·중복): `./lint.sh` — SonarCloud 봇이 PR에서 보는 항목을 미리 확인합니다.
 
 ## Coding convention
 

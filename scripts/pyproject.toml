@@ -9,3 +9,30 @@ dependencies = [
     "python-dotenv>=1.2.3",
     "requests>=2.34.2",
 ]
+
+[tool.ruff]
+line-length = 120
+
+[tool.ruff.lint]
+# 기본 활성 룰(415개)에 pylint 포팅 룰과 보안·복잡도 룰을 더한다.
+extend-select = [
+    "E",    # pycodestyle error (E402 임포트 위치 등)
+    "W",    # pycodestyle warning
+    "I",    # isort
+    "N",    # pep8-naming
+    "S",    # flake8-bandit (보안)
+    "C901", # mccabe 순환 복잡도
+    "PL",   # pylint 포팅 룰 (인자 수, 지역변수 수 등)
+    "TRY",  # 예외 처리 안티패턴
+    "DTZ",  # 타임존 없는 datetime
+]
+ignore = [
+    "RUF001", # 한글 문자열의 유니코드 모호성 경고
+    "RUF002", # 한글 docstring의 유니코드 모호성 경고
+    "RUF003", # 한글 주석의 유니코드 모호성 경고
+    "TRY003", # 예외 메시지를 raise 지점에 직접 두는 방식을 허용
+]
+
+[tool.ruff.lint.mccabe]
+# SonarCloud의 인지 복잡도 기본 임계값과 맞춘다.
+max-complexity = 15
