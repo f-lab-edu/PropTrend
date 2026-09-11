@@ -97,11 +97,7 @@ def generate_yyyymm_range(start: str = START_YYYYMM, end: str = END_YYYYMM) -> l
 
 def build_work_items(region_codes: list[dict]) -> list[tuple[str, str]]:
     months = generate_yyyymm_range()
-    return [
-        (yyyymm, region["code"])
-        for yyyymm in months
-        for region in region_codes
-    ]
+    return [(yyyymm, region["code"]) for yyyymm in months for region in region_codes]
 
 
 def output_path(api_id: str, yyyymm: str) -> Path:
@@ -161,8 +157,7 @@ def resume_start_index(work_items: list[tuple[str, str]], api_id: str) -> int:
         return work_items.index(target) + 1
     except ValueError:
         print(
-            f"[{api_id}] progress의 마지막 완료 지점({target})을 현재 작업 목록에서 "
-            "찾을 수 없어 처음부터 시작합니다.",
+            f"[{api_id}] progress의 마지막 완료 지점({target})을 현재 작업 목록에서 찾을 수 없어 처음부터 시작합니다.",
             file=sys.stderr,
         )
         return 0
@@ -383,8 +378,7 @@ def main() -> None:
     results = []
     with ThreadPoolExecutor(max_workers=len(API_CONFIGS)) as executor:
         futures = {
-            executor.submit(run_collector, api_id, base_url, service_key): api_id
-            for api_id, base_url in API_CONFIGS
+            executor.submit(run_collector, api_id, base_url, service_key): api_id for api_id, base_url in API_CONFIGS
         }
         for future in as_completed(futures):
             api_id = futures[future]

@@ -173,26 +173,18 @@ async def refresh_unit(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> UnitRe
     response = await C.RtmsDataCollector(spec.api_url, sgg_cd, deal_ymd).collect()
 
     async with session_scope() as session:
-        raw_deleted = await RawTableCleaner(session, spec.raw_model).clean(
-            deal_ymd, sgg_cd
-        )
+        raw_deleted = await RawTableCleaner(session, spec.raw_model).clean(deal_ymd, sgg_cd)
         raw_loaded = await RawDataLoader(session, spec.raw_model).load(response["rows"])
 
         # 응답이 아니라 raw를 다시 읽는다. 적재 과정의 키 정리를 거친 모습이 필요하고,
         # 같은 트랜잭션이라 방금 넣은 행이 그대로 보인다.
-        rows = await C.RawTableCollector(session, spec.raw_model).collect(
-            deal_ymd, sgg_cd
-        )
+        rows = await C.RawTableCollector(session, spec.raw_model).collect(deal_ymd, sgg_cd)
         payload = spec.build_preprocessor().preprocess(rows)
 
-        deleted = await spec.cleaner(session).clean(
-            spec.property_type, deal_ymd, sgg_cd
-        )
+        deleted = await spec.cleaner(session).clean(spec.property_type, deal_ymd, sgg_cd)
         loaded = await spec.loader(session).load(payload)
 
-    return UnitResult(
-        spec.name, sgg_cd, deal_ymd, raw_deleted, raw_loaded, deleted, loaded
-    )
+    return UnitResult(spec.name, sgg_cd, deal_ymd, raw_deleted, raw_loaded, deleted, loaded)
 
 
 async def refresh_legal_dong_codes() -> int:
@@ -209,9 +201,7 @@ async def sigungu_codes() -> list[str]:
     """실거래가 API의 LAWD_CD로 쓸 시군구 5자리 목록."""
     table = RawLegalDongCode.__table__
     async with session_scope() as session:
-        result = await session.execute(
-            select(table.c.region_cd).order_by(table.c.region_cd)
-        )
+        result = await session.execute(select(table.c.region_cd).order_by(table.c.region_cd))
         return [code[:5] for code in result.scalars() if code]
 
 
@@ -228,9 +218,7 @@ def recent_months(months: int = DEFAULT_MONTHS, today: date | None = None) -> li
     return result
 
 
-def iter_units(
-    sgg_list: Sequence[str], month_list: Sequence[str]
-) -> Iterator[tuple[PipelineSpec, str, str]]:
+def iter_units(sgg_list: Sequence[str], month_list: Sequence[str]) -> Iterator[tuple[PipelineSpec, str, str]]:
     """갱신 단위를 최신 월부터 훑는다. 중간에 잘려도 최근 데이터가 먼저 반영된다."""
     for deal_ymd in month_list:
         for sgg_cd in sgg_list:
@@ -238,9 +226,7 @@ def iter_units(
                 yield spec, sgg_cd, deal_ymd
 
 
-async def refresh_all(
-    months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_CONCURRENCY
-) -> dict[str, int]:
+async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_CONCURRENCY) -> dict[str, int]:
     """하루치 갱신 전체. 스케줄러에 등록되는 작업은 이 함수 하나다."""
     await refresh_legal_dong_codes()
     sgg_list = await sigungu_codes()

@@ -82,13 +82,9 @@ class TransactionMixin:
             ),
         )
 
-    id: Mapped[int] = mapped_column(
-        BigInteger, primary_key=True, autoincrement=True, sort_order=-1
-    )
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True, sort_order=-1)
 
-    property_type: Mapped[PropertyType] = mapped_column(
-        PropertyTypeColumn, sort_order=-1
-    )
+    property_type: Mapped[PropertyType] = mapped_column(PropertyTypeColumn, sort_order=-1)
     # 원본 houseType(연립/다세대/단독/다가구). 아파트·오피스텔은 NULL.
     house_type: Mapped[str | None] = mapped_column(String(10), sort_order=-1)
 
@@ -107,22 +103,16 @@ class TransactionMixin:
     deal_date: Mapped[date] = mapped_column(Date, sort_order=-1)
 
     # 전용면적(㎡)/층. 단독·다가구는 개념이 없어 NULL.
-    exclusive_use_area: Mapped[float | None] = mapped_column(
-        Numeric(10, 4), sort_order=-1
-    )
+    exclusive_use_area: Mapped[float | None] = mapped_column(Numeric(10, 4), sort_order=-1)
     floor: Mapped[int | None] = mapped_column(SmallInteger, sort_order=-1)
     build_year: Mapped[int | None] = mapped_column(SmallInteger, sort_order=-1)
 
     # 연면적. 단독·다가구에만 존재하며 매매/전월세 양쪽 원본에 모두 있다.
     # 전용면적과 달리 필지 단위 면적이라 자릿수가 크고 원본에 오류값이 섞여 있어
     # (10,4)로는 넘친다. 실측 최대 123,101.43(smf_rent).
-    total_floor_area: Mapped[float | None] = mapped_column(
-        Numeric(14, 4), sort_order=-1
-    )
+    total_floor_area: Mapped[float | None] = mapped_column(Numeric(14, 4), sort_order=-1)
 
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), sort_order=100
-    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), sort_order=100)
 
 
 class SaleTransaction(Base, TransactionMixin):

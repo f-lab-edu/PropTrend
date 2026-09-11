@@ -51,9 +51,7 @@ from src.model.raw import (
 
 logger = logging.getLogger("load_results")
 
-RESULTS_DIR = Path(
-    os.environ.get("RESULTS_DIR", str(REPO_ROOT / "scripts" / "results"))
-)
+RESULTS_DIR = Path(os.environ.get("RESULTS_DIR", str(REPO_ROOT / "scripts" / "results")))
 # 옛 파이프라인(가공 후 sale/rent_transactions 적재)의 기록이 load_results.progress.json에
 # 남아 있으므로 섞이지 않게 파일을 분리한다.
 PROGRESS_PATH = RESULTS_DIR / "load_raw.progress.json"
@@ -108,9 +106,7 @@ class Progress:
         }
         # 쓰는 도중 중단돼도 기존 기록이 깨지지 않도록 임시 파일에 쓴 뒤 교체한다.
         tmp_path = self._path.with_suffix(".json.tmp")
-        tmp_path.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-        )
+        tmp_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
         os.replace(tmp_path, self._path)
 
 
@@ -221,9 +217,7 @@ async def _ingest_file(path: Path, model: type[Base], *, dry_run: bool) -> int:
         return await RawDataLoader(session, model).load(items)
 
 
-async def _ingest_api(
-    api_id: str, args: argparse.Namespace, progress: Progress, failures: list[str]
-) -> int:
+async def _ingest_api(api_id: str, args: argparse.Namespace, progress: Progress, failures: list[str]) -> int:
     model = SOURCES[api_id]
 
     api_rows = 0
@@ -282,9 +276,7 @@ async def run() -> int:
     for api_id in api_ids:
         total_rows += await _ingest_api(api_id, args, progress, failures)
 
-    logger.info(
-        "전체 완료: %d행, %.1f분 소요", total_rows, (time.monotonic() - started) / 60
-    )
+    logger.info("전체 완료: %d행, %.1f분 소요", total_rows, (time.monotonic() - started) / 60)
     if failures:
         logger.error("실패한 파일 %d건: %s", len(failures), ", ".join(failures))
         logger.error("다시 실행하면 실패한 파일만 재시도합니다")

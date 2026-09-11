@@ -42,15 +42,9 @@ class LegalDongCodeCollector:
     @staticmethod
     def _is_sigungu(row: dict[str, Any]) -> bool:
         """시군구 단위(SSGGG00000) 행인지 판별한다."""
-        return (
-            row.get("sgg_cd") != "000"
-            and row.get("umd_cd") == "000"
-            and row.get("ri_cd") == "00"
-        )
+        return row.get("sgg_cd") != "000" and row.get("umd_cd") == "000" and row.get("ri_cd") == "00"
 
-    async def _fetch_page(
-        self, client: httpx.AsyncClient, page_no: int
-    ) -> dict[str, Any]:
+    async def _fetch_page(self, client: httpx.AsyncClient, page_no: int) -> dict[str, Any]:
         params = {
             "ServiceKey": os.environ["DATA_GO_KR_SERVICE_KEY"],
             "type": "xml",
@@ -67,8 +61,7 @@ class LegalDongCodeCollector:
         result = head.find("./RESULT") if head is not None else None
         # 에러 응답은 head 없이 최상위에 resultCode/resultMsg만 담겨 온다.
         rows = [
-            {field.tag: (field.text.strip() if field.text else None) for field in row}
-            for row in root.findall("./row")
+            {field.tag: (field.text.strip() if field.text else None) for field in row} for row in root.findall("./row")
         ]
 
         return {
@@ -76,16 +69,8 @@ class LegalDongCodeCollector:
             "numOfRows": head.findtext("numOfRows") if head is not None else None,
             "pageNo": head.findtext("pageNo") if head is not None else None,
             "type": head.findtext("type") if head is not None else None,
-            "resultCode": (
-                result.findtext("resultCode")
-                if result is not None
-                else root.findtext("./resultCode")
-            ),
-            "resultMsg": (
-                result.findtext("resultMsg")
-                if result is not None
-                else root.findtext("./resultMsg")
-            ),
+            "resultCode": (result.findtext("resultCode") if result is not None else root.findtext("./resultCode")),
+            "resultMsg": (result.findtext("resultMsg") if result is not None else root.findtext("./resultMsg")),
             "rows": rows,
         }
 
@@ -120,9 +105,7 @@ class RtmsDataCollector:
 
         return {**page, "rows": rows}
 
-    async def _fetch_page(
-        self, client: httpx.AsyncClient, page_no: int
-    ) -> dict[str, Any]:
+    async def _fetch_page(self, client: httpx.AsyncClient, page_no: int) -> dict[str, Any]:
         params = {
             "serviceKey": os.environ["DATA_GO_KR_SERVICE_KEY"],
             "LAWD_CD": self.lawd_cd,
@@ -157,9 +140,7 @@ class RawTableCollector:
         self.session = session
         self.model = model
 
-    async def collect(
-        self, deal_ymd: str, sgg_cd: str | None = None
-    ) -> Sequence[RowMapping]:
+    async def collect(self, deal_ymd: str, sgg_cd: str | None = None) -> Sequence[RowMapping]:
         """(계약년월, 시군구) 단위의 원본 행을 모두 읽어 반환한다."""
         year, month = parse_deal_ymd(deal_ymd)
 

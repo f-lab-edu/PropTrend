@@ -24,12 +24,8 @@ def fetch_page(service_key: str, page_no: int) -> ET.Element:
     response.raise_for_status()
     root = ET.fromstring(response.text)
 
-    result_code = root.findtext("./head/RESULT/resultCode") or root.findtext(
-        "./resultCode"
-    )
-    result_msg = root.findtext("./head/RESULT/resultMsg") or root.findtext(
-        "./resultMsg"
-    )
+    result_code = root.findtext("./head/RESULT/resultCode") or root.findtext("./resultCode")
+    result_msg = root.findtext("./head/RESULT/resultMsg") or root.findtext("./resultMsg")
     if result_code is None or not result_code.startswith("INFO"):
         raise RuntimeError(f"API error {result_code}: {result_msg}")
 
@@ -47,11 +43,7 @@ def collect_sigungu_codes(service_key: str) -> list[dict]:
             break
 
         for row in rows:
-            if (
-                row.findtext("sgg_cd") == "000"
-                or row.findtext("umd_cd") != "000"
-                or row.findtext("ri_cd") != "00"
-            ):
+            if row.findtext("sgg_cd") == "000" or row.findtext("umd_cd") != "000" or row.findtext("ri_cd") != "00":
                 continue
             region_cd = row.findtext("region_cd")
             name = row.findtext("locatadd_nm")
@@ -72,9 +64,7 @@ def main() -> None:
     data = collect_sigungu_codes(service_key)
 
     OUTPUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUTPUT_PATH.write_text(
-        json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
+    OUTPUT_PATH.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"Saved {len(data)} entries to {OUTPUT_PATH}")
 
 

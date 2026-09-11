@@ -13,9 +13,7 @@ from sqlalchemy.ext.asyncio import (
 
 from .model import Base
 
-DEFAULT_DATABASE_URL = (
-    "postgresql+asyncpg://postgres:postgres@localhost:5432/prop_trend"
-)
+DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/prop_trend"
 
 _engine: AsyncEngine | None = None
 _session_factory: async_sessionmaker[AsyncSession] | None = None

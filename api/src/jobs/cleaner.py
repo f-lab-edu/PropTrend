@@ -17,9 +17,7 @@ class TransactionCleaner:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
 
-    async def clean(
-        self, property_type: PropertyType, deal_ymd: str, sgg_cd: str | None = None
-    ) -> int:
+    async def clean(self, property_type: PropertyType, deal_ymd: str, sgg_cd: str | None = None) -> int:
         """`sgg_cd`를 생략하면 해당 월 전국이 지워지므로 백필 외에는 쓰지 않는다."""
         start, end = month_range(deal_ymd)
         table = self.model.__table__

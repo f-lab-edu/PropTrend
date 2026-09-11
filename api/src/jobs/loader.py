@@ -17,9 +17,7 @@ class RawDataLoader:
         self.session = session
         self.model = model
         self.columns = tuple(
-            column.name
-            for column in model.__table__.columns
-            if column.name not in {"id", "created_at"}
+            column.name for column in model.__table__.columns if column.name not in {"id", "created_at"}
         )
 
     async def load(self, rows: list[dict[str, Any]]) -> int:
@@ -34,9 +32,7 @@ class RawDataLoader:
 
         for start in range(0, len(payload), self.CHUNK_SIZE):
             # 모델을 넘기면 ORM 경로를 타서 느리다(docs/temp/bulk-insert-compile-cache.md).
-            await self.session.execute(
-                insert(self.model.__table__), payload[start : start + self.CHUNK_SIZE]
-            )
+            await self.session.execute(insert(self.model.__table__), payload[start : start + self.CHUNK_SIZE])
 
         return len(payload)
 
@@ -51,9 +47,7 @@ class TransactionLoader:
     def __init__(self, session: AsyncSession) -> None:
         self.session = session
         self.columns = frozenset(
-            column.name
-            for column in self.model.__table__.columns
-            if column.name not in {"id", "created_at"}
+            column.name for column in self.model.__table__.columns if column.name not in {"id", "created_at"}
         )
 
     async def load(self, rows: list[dict[str, Any]]) -> int:
@@ -70,9 +64,7 @@ class TransactionLoader:
             )
 
         for start in range(0, len(rows), self.CHUNK_SIZE):
-            await self.session.execute(
-                insert(self.model.__table__), rows[start : start + self.CHUNK_SIZE]
-            )
+            await self.session.execute(insert(self.model.__table__), rows[start : start + self.CHUNK_SIZE])
 
         return len(rows)
 

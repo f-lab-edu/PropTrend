@@ -44,18 +44,12 @@ class RawTablePreprocessor(ABC):
         try:
             return self._common(row) | self._specific(row)
         except (ValueError, InvalidOperation) as error:
-            raise ValueError(
-                f"{self.table_name} 행을 가공할 수 없다(id={row.get('id')}): {error}"
-            ) from error
+            raise ValueError(f"{self.table_name} 행을 가공할 수 없다(id={row.get('id')}): {error}") from error
 
     def _common(self, row: RowMapping) -> dict[str, Any]:
         """매매·전월세가 함께 쓰는 컬럼을 채운다(draft.md 2절)."""
         sido_code, sigungu_code = split_sgg_cd(_required(row, "sggCd"))
-        building_name = (
-            _text(row.get(self.building_name_field))
-            if self.building_name_field
-            else None
-        )
+        building_name = _text(row.get(self.building_name_field)) if self.building_name_field else None
         return {
             "property_type": self.property_type,
             "house_type": _text(row.get("houseType")),
@@ -169,9 +163,5 @@ def _short_date(value: str | None) -> date | None:
 
 def _road_address(row: RowMapping) -> dict[str, str] | None:
     """아파트 전월세 전용 도로명 7개 필드를 컬럼 대신 dict 하나로 묶는다(draft.md 1절)."""
-    detail = {
-        field: value
-        for field in ROAD_ADDRESS_FIELDS
-        if (value := _text(row.get(field))) is not None
-    }
+    detail = {field: value for field in ROAD_ADDRESS_FIELDS if (value := _text(row.get(field))) is not None}
     return detail or None
