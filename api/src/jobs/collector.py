@@ -25,8 +25,25 @@ class OpenApiError(RuntimeError):
     """오픈API가 오류 결과코드를 돌려줬다."""
 
 
+class OpenApiStatusError(OpenApiError):
+    """오픈API가 HTTP 오류를 돌려줬다."""
+
+    def __init__(self, status_code: int) -> None:
+        super().__init__(f"오픈API HTTP 오류: status={status_code}")
+        self.status_code = status_code
+
+
 class DailyLimitReachedError(OpenApiError):
     """일일 활용건수를 초과했다(결과코드 22). 남은 요청도 모두 같은 응답을 받는다."""
+
+
+def _raise_for_status(response: httpx.Response) -> None:
+    """HTTPStatusError 메시지에는 인증키가 실린 요청 URL이 들어 있어 상태 코드만 남긴다."""
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        # from None으로 원인을 끊지 않으면 logger.exception이 __cause__까지 찍어 URL이 다시 샌다.
+        raise OpenApiStatusError(response.status_code) from None
 
 
 def _check_rtms_result_code(result_code: str | None, result_msg: str | None) -> None:
@@ -85,7 +102,7 @@ class LegalDongCodeCollector:
             "flag": "Y",
         }
         response = await client.get(self.API_URL, params=params)
-        response.raise_for_status()
+        _raise_for_status(response)
 
         root = safe_xml_fromstring(response.text)
 
@@ -143,7 +160,7 @@ class RtmsDataCollector:
             "numOfRows": self.MAX_ROWS_PER_PAGE,
         }
         response = await client.get(self.api_url, params=params)
-        response.raise_for_status()
+        _raise_for_status(response)
 
         root = safe_xml_fromstring(response.text)
 

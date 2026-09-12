@@ -86,6 +86,9 @@ class RefreshRunner:
             # 백그라운드 태스크에서 예외를 흘리면 아무도 받지 않는다. 상태에 남겨
             # 조회로 확인할 수 있게 한다.
             logger.exception("갱신 실행 실패")
+            # 이 문자열은 GET /jobs/refresh 응답으로 그대로 나간다. 예외 메시지에
+            # 인증키나 접속 정보가 섞이지 않아야 한다(수집기는 collector.py의
+            # _raise_for_status로 요청 URL을 걷어낸다).
             self._state = replace(
                 self._state,
                 running=False,
