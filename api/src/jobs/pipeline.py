@@ -29,7 +29,12 @@ from .cleaner import (
     SaleTransactionCleaner,
     TransactionCleaner,
 )
-from .collector import LegalDongCodeCollector, RawTableCollector, RtmsDataCollector
+from .collector import (
+    DailyLimitReachedError,
+    LegalDongCodeCollector,
+    RawTableCollector,
+    RtmsDataCollector,
+)
 from .loader import (
     RawDataLoader,
     RentTransactionLoader,
@@ -244,12 +249,22 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
     )
 
     semaphore = asyncio.Semaphore(concurrency)
-    summary = {"units": len(units), "succeeded": 0, "failed": 0, "loaded": 0}
+    stop = asyncio.Event()
+    summary = {"units": len(units), "succeeded": 0, "failed": 0, "skipped": 0, "daily_limit": 0, "loaded": 0}
 
     async def run(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> None:
         async with semaphore:
+            # 슬롯을 기다리는 사이에 제한에 걸렸을 수 있다. 남은 단위는 슬롯만 스치고 끝난다.
+            if stop.is_set():
+                summary["skipped"] += 1
+                return
             try:
                 result = await refresh_unit(spec, sgg_cd, deal_ymd)
+            except DailyLimitReachedError:
+                # 남은 단위도 전부 같은 응답을 받는다. 여기서 접고 내일 회차에 맡긴다.
+                stop.set()
+                summary["daily_limit"] += 1
+                logger.warning("일일 호출 제한 도달, 남은 단위를 건너뛴다: %s %s %s", spec.name, sgg_cd, deal_ymd)
             except Exception:
                 # 단위 1건은 트랜잭션째 되돌아가므로 나머지를 멈추지 않고 넘어간다.
                 summary["failed"] += 1
@@ -261,9 +276,13 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
     await asyncio.gather(*(run(*unit) for unit in units))
 
     logger.info(
-        "갱신 종료: 성공 %d / 실패 %d / 적재 %d건",
+        "갱신 종료: 성공 %d / 실패 %d / 건너뜀 %d / 적재 %d건",
         summary["succeeded"],
         summary["failed"],
+        summary["skipped"],
         summary["loaded"],
     )
+    if summary["daily_limit"]:
+        # 사유는 사람이 읽는 로그에 남긴다. summary는 dict[str, int]라 문자열을 담을 수 없다.
+        logger.warning("일일 호출 제한으로 %d단위를 남기고 중단했다", summary["skipped"])
     return summary
