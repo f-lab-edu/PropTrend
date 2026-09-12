@@ -1,13 +1,18 @@
 [project]
-name = "data-collection-system"
+name = "api"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
+    "apscheduler>=3.11.3",
+    "asyncpg>=0.31.0",
     "defusedxml>=0.7.1",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
     "python-dotenv>=1.2.3",
-    "requests>=2.34.2",
+    "sqlalchemy>=2.0.52",
+    "uvicorn[standard]>=0.52.4",
 ]
 
 [tool.ruff]
@@ -37,6 +42,12 @@ ignore = [
 # SonarCloud의 인지 복잡도 기본 임계값과 맞춘다.
 max-complexity = 15
 
+[tool.ruff.lint.pep8-naming]
+# declared_attr.directive는 self가 아닌 cls를 받는다.
+classmethod-decorators = ["sqlalchemy.orm.declared_attr.directive"]
+
 [tool.ruff.lint.per-file-ignores]
-# api 프로젝트를 sys.path에 올린 뒤에야 src.* 모듈을 임포트할 수 있다.
-"src/load_results.py" = ["E402"]
+# raw 테이블은 오픈API 응답 필드명을 그대로 보존하므로 camelCase를 허용한다.
+"src/model/raw.py" = ["N815"]
+# 엔진과 세션 팩토리를 최초 호출 시점에 한 번만 만드는 지연 초기화 싱글턴이다.
+"src/db.py" = ["PLW0603"]

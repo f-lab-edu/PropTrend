@@ -18,5 +18,40 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build: ./api
+    container_name: prop-trend-api
+    restart: unless-stopped
+    env_file:
+      # 오픈API 인증키(DATA_GO_KR_SERVICE_KEY)와 갱신 API 인증키(REFRESH_API_KEY)를
+      # 여기서 읽는다. 커밋되지 않는 파일이라 없어도 컨테이너는 뜬다. 수집은 부르는
+      # 시점에 실패하고, 갱신 API는 503으로 잠긴다.
+      - path: ./api/.env
+        required: false
+    environment:
+      # 컨테이너 안의 localhost는 자기 자신이므로 .env의 로컬 개발용 주소를 덮어쓴다.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/prop_trend
+      # 스케줄러의 cron과 "이번 달" 계산이 KST 기준이다.
+      TZ: Asia/Seoul
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        # 기동 직후엔 아직 접속을 못 받으므로 healthcheck 통과를 기다린다.
+        condition: service_healthy
+    healthcheck:
+      # slim 이미지에 curl이 없어 파이썬으로 확인한다.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 volumes:
   postgres-data:
