@@ -23,8 +23,9 @@ services:
     container_name: prop-trend-api
     restart: unless-stopped
     env_file:
-      # 오픈API 인증키(DATA_GO_KR_SERVICE_KEY)를 여기서 읽는다. 커밋되지 않는
-      # 파일이라 없어도 컨테이너는 뜨고, 수집을 부르는 시점에 실패한다.
+      # 오픈API 인증키(DATA_GO_KR_SERVICE_KEY)와 갱신 API 인증키(REFRESH_API_KEY)를
+      # 여기서 읽는다. 커밋되지 않는 파일이라 없어도 컨테이너는 뜬다. 수집은 부르는
+      # 시점에 실패하고, 갱신 API는 503으로 잠긴다.
       - path: ./api/.env
         required: false
     environment:

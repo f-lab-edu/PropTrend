@@ -36,6 +36,7 @@ Docker Compose로 PostgreSQL과 API 애플리케이션 서버를 함께 띄운�
 
 ```bash
 cp api/.env.example api/.env   # DATA_GO_KR_SERVICE_KEY(공공데이터포털 인증키) 입력
+echo "REFRESH_API_KEY=$(openssl rand -hex 32)" >> api/.env   # 갱신 API 인증키 생성
 docker compose up -d
 ```
 
@@ -45,14 +46,20 @@ docker compose up -d
 - `api/.env`의 `DATABASE_URL`은 컴포즈가 컨테이너 네트워크 주소로 덮어쓰므로 로컬 실행에만 쓰인다.
 
 데이터 갱신은 매일 03시(KST) 스케줄러가 돌린다. 기다리지 않고 지금 돌리려면 강제 실행 API를 쓴다.
+갱신 API는 `api/.env`의 `REFRESH_API_KEY`와 같은 `X-API-Key` 헤더를 요구한다.
 
 ```bash
-curl -X POST localhost:8000/jobs/refresh   # 백그라운드로 시작(202), 실행 중이면 409
-curl localhost:8000/jobs/refresh           # 진행 상황과 마지막 실행 결과
+KEY=$(grep '^REFRESH_API_KEY=' api/.env | cut -d= -f2)
+
+curl -X POST -H "X-API-Key: $KEY" localhost:8000/jobs/refresh   # 백그라운드로 시작(202), 실행 중이면 409
+curl -H "X-API-Key: $KEY" localhost:8000/jobs/refresh           # 진행 상황과 마지막 실행 결과
 
 docker compose logs -f api                 # 갱신 로그
 docker compose down                        # 중지(-v를 붙이면 DB 데이터까지 삭제)
 ```
+
+키를 설정하지 않으면 갱신 API는 503으로 잠긴다. 매일 03시 예약 실행은 HTTP를 타지 않으므로 영향받지 않는다.
+`/health`는 인증 없이 열려 있다(컴포즈 헬스체크가 쓴다).
 
 DB만 컨테이너로 띄우고 서버는 로컬에서 실행할 수도 있다.
 

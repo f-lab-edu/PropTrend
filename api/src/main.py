@@ -1,4 +1,5 @@
 import logging
+import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
@@ -6,15 +7,18 @@ from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException, status
+from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from .db import create_tables, dispose_engine
 from .jobs.pipeline import DEFAULT_CONCURRENCY, DEFAULT_MONTHS
 from .jobs.runner import RefreshAlreadyRunningError, RefreshRunner, RefreshState
 from .jobs.utils import KST
+from .security import API_KEY_ENV, require_api_key
 
 load_dotenv()
+
+logger = logging.getLogger(__name__)
 
 # httpx는 INFO에서 요청 URL을 통째로 남기는데, 실거래가 API는 serviceKey를
 # 쿼리스트링으로 받으므로 그대로 두면 인증키가 로그에 찍힌다.
@@ -27,6 +31,11 @@ runner = RefreshRunner()
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await create_tables()
+
+    if not os.environ.get(API_KEY_ENV):
+        # 기동은 막지 않는다. 키가 없다는 건 수동 실행을 못 쓴다는 뜻이지,
+        # 매일 03시 갱신까지 멈춰야 한다는 뜻은 아니다.
+        logger.warning("%s가 없어 /jobs/refresh를 잠근다", API_KEY_ENV)
 
     scheduler.add_job(
         runner.run_scheduled,
@@ -85,6 +94,7 @@ def health_check() -> dict[str, str]:
     "/jobs/refresh",
     status_code=status.HTTP_202_ACCEPTED,
     summary="갱신 파이프라인 강제 실행",
+    dependencies=[Depends(require_api_key)],
 )
 async def trigger_refresh(request: RefreshRequest | None = None) -> RefreshStatus:
     """예약을 기다리지 않고 갱신을 지금 시작한다."""
@@ -97,7 +107,12 @@ async def trigger_refresh(request: RefreshRequest | None = None) -> RefreshStatu
     return RefreshStatus.of(state)
 
 
-@app.get("/jobs/refresh", summary="갱신 파이프라인 실행 상태")
+# 실행 상태에는 마지막 실패의 예외 메시지가 담기므로 조회도 함께 막는다.
+@app.get(
+    "/jobs/refresh",
+    summary="갱신 파이프라인 실행 상태",
+    dependencies=[Depends(require_api_key)],
+)
 async def refresh_status() -> RefreshStatus:
     """진행 중이면 시작 시각을, 끝났으면 마지막 실행의 집계나 오류를 돌려준다."""
     return RefreshStatus.of(runner.state)
