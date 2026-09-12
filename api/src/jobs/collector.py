@@ -12,6 +12,35 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..model import Base
 from .utils import parse_deal_ymd
 
+# 실거래가 오픈API 8종이 공유하는 결과코드(scripts/docs/data-api/*.md의 에러 코드표).
+SUCCESS_RESULT_CODE = "000"
+NO_DATA_RESULT_CODE = "03"
+DAILY_LIMIT_RESULT_CODE = "22"
+
+# 법정동코드 API는 정상 응답의 결과코드가 INFO-0으로 온다.
+LEGAL_DONG_SUCCESS_PREFIX = "INFO"
+
+
+class OpenApiError(RuntimeError):
+    """오픈API가 오류 결과코드를 돌려줬다."""
+
+
+class DailyLimitReachedError(OpenApiError):
+    """일일 활용건수를 초과했다(결과코드 22). 남은 요청도 모두 같은 응답을 받는다."""
+
+
+def _check_rtms_result_code(result_code: str | None, result_msg: str | None) -> None:
+    """정상(000)과 데이터없음(03) 외에는 수집을 진행시키지 않는다.
+
+    일시적 오류(01·02·04·05)도 예외로 올린다. 백필용 collect_rtms.py는 재시도하지만,
+    이쪽은 매일 도는 갱신이라 실패한 단위를 다음 회차가 다시 가져간다. 비동기 백오프는
+    기다리는 동안 세마포어 슬롯을 쥐고 있어 배치 전체를 늦춘다.
+    """
+    if result_code == DAILY_LIMIT_RESULT_CODE:
+        raise DailyLimitReachedError(f"오픈API 일일 호출 제한: {result_msg}")
+    if result_code not in (SUCCESS_RESULT_CODE, NO_DATA_RESULT_CODE):
+        raise OpenApiError(f"오픈API 오류 {result_code}: {result_msg}")
+
 
 class LegalDongCodeCollector:
     """행정안전부_행정표준코드_법정동코드(getStanReginCdList) 수집기."""
@@ -21,7 +50,7 @@ class LegalDongCodeCollector:
     TIMEOUT = 10
     SUCCESS_RESULT_CODE_PREFIX = "INFO"
 
-    async def collect(self) -> dict[str, Any]:
+    async def collect(self) -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
         page_no = 1
 
@@ -30,14 +59,17 @@ class LegalDongCodeCollector:
                 page = await self._fetch_page(client, page_no)
                 rows.extend(row for row in page["rows"] if self._is_sigungu(row))
 
-                result_code = page["resultCode"] or ""
-                if not result_code.startswith(self.SUCCESS_RESULT_CODE_PREFIX):
-                    break
                 if page_no * self.MAX_ROWS_PER_PAGE >= _to_int(page["totalCount"]):
                     break
                 page_no += 1
 
-        return {**page, "rows": rows}
+        if not rows:
+            # 호출부가 이 목록으로 법정동코드 표를 통째로 갈아끼운다. 데이터없음(INFO-200)도
+            # 접두사 검사를 통과하므로, 빈 목록을 정상으로 넘기면 표가 비고 이후 모든 갱신이
+            # 시군구 목록을 잃는다.
+            raise OpenApiError("법정동코드 응답에 시군구 행이 없다")
+
+        return rows
 
     @staticmethod
     def _is_sigungu(row: dict[str, Any]) -> bool:
@@ -60,17 +92,17 @@ class LegalDongCodeCollector:
         head = root.find("./head")
         result = head.find("./RESULT") if head is not None else None
         # 에러 응답은 head 없이 최상위에 resultCode/resultMsg만 담겨 온다.
+        result_code = (result.findtext("resultCode") if result is not None else root.findtext("./resultCode")) or ""
+        result_msg = result.findtext("resultMsg") if result is not None else root.findtext("./resultMsg")
+        if not result_code.startswith(self.SUCCESS_RESULT_CODE_PREFIX):
+            raise OpenApiError(f"법정동코드 API 오류 {result_code}: {result_msg}")
+
         rows = [
             {field.tag: (field.text.strip() if field.text else None) for field in row} for row in root.findall("./row")
         ]
 
         return {
             "totalCount": head.findtext("totalCount") if head is not None else None,
-            "numOfRows": head.findtext("numOfRows") if head is not None else None,
-            "pageNo": head.findtext("pageNo") if head is not None else None,
-            "type": head.findtext("type") if head is not None else None,
-            "resultCode": (result.findtext("resultCode") if result is not None else root.findtext("./resultCode")),
-            "resultMsg": (result.findtext("resultMsg") if result is not None else root.findtext("./resultMsg")),
             "rows": rows,
         }
 
@@ -80,30 +112,27 @@ class RtmsDataCollector:
 
     MAX_ROWS_PER_PAGE = 10000
     TIMEOUT = 10
-    SUCCESS_RESULT_CODE = "000"
 
     def __init__(self, api_url: str, lawd_cd: str, deal_ymd: str) -> None:
         self.api_url = api_url
         self.lawd_cd = lawd_cd
         self.deal_ymd = deal_ymd
 
-    async def collect(self) -> dict[str, Any]:
-        rows: list[dict[str, Any]] = []
-        page_no = 1
-
+    async def collect(self) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
-            while True:
+            page = await self._fetch_page(client, 1)
+            # 해당 시군구·계약년월에 거래가 없는 달은 정상이다. 빈 목록으로 갱신하면 그만이다.
+            if page["resultCode"] == NO_DATA_RESULT_CODE:
+                return []
+
+            rows = list(page["rows"])
+            page_no = 1
+            while page_no * self.MAX_ROWS_PER_PAGE < _to_int(page["totalCount"]):
+                page_no += 1
                 page = await self._fetch_page(client, page_no)
                 rows.extend(page["rows"])
 
-                # 데이터없음(03)을 포함해 정상(000)이 아니면 더 넘길 페이지가 없다.
-                if page["resultCode"] != self.SUCCESS_RESULT_CODE:
-                    break
-                if page_no * self.MAX_ROWS_PER_PAGE >= _to_int(page["totalCount"]):
-                    break
-                page_no += 1
-
-        return {**page, "rows": rows}
+        return rows
 
     async def _fetch_page(self, client: httpx.AsyncClient, page_no: int) -> dict[str, Any]:
         params = {
@@ -118,6 +147,9 @@ class RtmsDataCollector:
 
         root = safe_xml_fromstring(response.text)
 
+        result_code = root.findtext("./header/resultCode")
+        _check_rtms_result_code(result_code, root.findtext("./header/resultMsg"))
+
         rows = [
             {field.tag: (field.text.strip() if field.text else None) for field in item}
             for item in root.findall("./body/items/item")
@@ -125,10 +157,7 @@ class RtmsDataCollector:
 
         return {
             "totalCount": root.findtext("./body/totalCount"),
-            "numOfRows": root.findtext("./body/numOfRows"),
-            "pageNo": root.findtext("./body/pageNo"),
-            "resultCode": root.findtext("./header/resultCode"),
-            "resultMsg": root.findtext("./header/resultMsg"),
+            "resultCode": result_code,
             "rows": rows,
         }
 

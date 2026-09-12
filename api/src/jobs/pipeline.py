@@ -170,11 +170,12 @@ async def refresh_unit(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> UnitRe
     parse_deal_ymd(deal_ymd)  # API를 부르기 전에 형식부터 막는다.
 
     # 응답을 기다리는 동안 커넥션과 삭제 락을 쥐지 않도록 트랜잭션 밖에서 호출한다.
-    response = await RtmsDataCollector(spec.api_url, sgg_cd, deal_ymd).collect()
+    # 오픈API가 오류를 돌려주면 여기서 예외가 나므로 삭제는 시작조차 하지 않는다.
+    items = await RtmsDataCollector(spec.api_url, sgg_cd, deal_ymd).collect()
 
     async with session_scope() as session:
         raw_deleted = await RawTableCleaner(session, spec.raw_model).clean(deal_ymd, sgg_cd)
-        raw_loaded = await RawDataLoader(session, spec.raw_model).load(response["rows"])
+        raw_loaded = await RawDataLoader(session, spec.raw_model).load(items)
 
         # 응답이 아니라 raw를 다시 읽는다. 적재 과정의 키 정리를 거친 모습이 필요하고,
         # 같은 트랜잭션이라 방금 넣은 행이 그대로 보인다.
@@ -189,10 +190,11 @@ async def refresh_unit(spec: PipelineSpec, sgg_cd: str, deal_ymd: str) -> UnitRe
 
 async def refresh_legal_dong_codes() -> int:
     """시군구 목록의 출처인 법정동코드를 통째로 갱신한다."""
-    response = await LegalDongCodeCollector().collect()
+    # 표를 통째로 비우므로, 오류나 빈 응답이 여기까지 올라오지 않는 것이 전제다.
+    items = await LegalDongCodeCollector().collect()
     async with session_scope() as session:
         await session.execute(delete(RawLegalDongCode.__table__))
-        loaded = await RawDataLoader(session, RawLegalDongCode).load(response["rows"])
+        loaded = await RawDataLoader(session, RawLegalDongCode).load(items)
     logger.info("법정동코드 %d건 갱신", loaded)
     return loaded
 
