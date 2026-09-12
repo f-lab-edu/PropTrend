@@ -11,7 +11,7 @@ from fastapi import Depends, FastAPI, HTTPException, status
 from pydantic import BaseModel, Field
 
 from .db import create_tables, dispose_engine
-from .jobs.pipeline import DEFAULT_CONCURRENCY, DEFAULT_MONTHS
+from .jobs.pipeline import DEFAULT_CONCURRENCY, DEFAULT_MONTHS, MAX_MONTHS
 from .jobs.runner import RefreshAlreadyRunningError, RefreshRunner, RefreshState
 from .jobs.utils import KST
 from .security import API_KEY_ENV, require_api_key
@@ -61,7 +61,7 @@ app = FastAPI(title="prop-trend API", lifespan=lifespan)
 class RefreshRequest(BaseModel):
     """수동 실행에서 조정할 수 있는 값. 생략하면 예약 실행과 같은 조건으로 돈다."""
 
-    months: int = Field(DEFAULT_MONTHS, ge=1, le=24, description="이번 달부터 거슬러 갱신할 개월 수")
+    months: int = Field(DEFAULT_MONTHS, ge=1, le=MAX_MONTHS, description="이번 달부터 거슬러 갱신할 개월 수")
     concurrency: int = Field(
         DEFAULT_CONCURRENCY,
         ge=1,

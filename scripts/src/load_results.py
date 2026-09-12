@@ -290,10 +290,8 @@ async def _ingest_api(
     return api_rows
 
 
-async def run() -> int:
-    args = _parse_args()
-    api_ids = args.api_ids or list(SOURCES)
-
+async def _prepare(args: argparse.Namespace, api_ids: list[str]) -> int | None:
+    """적재 전 준비를 끝낸다. 적재를 시작하면 안 되는 상태면 종료 코드를 돌려준다."""
     if args.create_tables and not args.dry_run:
         await _create_tables()
 
@@ -318,13 +316,33 @@ async def run() -> int:
         logger.warning("--restart는 기존 행을 지우지 않습니다. 이미 적재된 파일을 다시 넣으면 행이 중복됩니다")
         logger.warning("처음부터 깨끗이 다시 넣으려면 --truncate를 쓰세요")
 
-    # dry-run은 무엇이 적재될지 전부 보여주는 게 목적이라 이전 기록을 따르지 않는다.
-    # --restart는 기록을 지우지 않고 이번 실행에서만 무시한다. 지워버리면 중간에 죽었을 때
-    # 고르지 않은 API의 기록까지 사라진다.
-    completed: set[tuple[str, str]] = set()
-    if not (args.restart or args.dry_run):
-        completed = await _completed_keys(api_ids)
-        logger.info("이전 진행 기록 %d건을 불러왔습니다", len(completed))
+    return None
+
+
+async def _resume_point(args: argparse.Namespace, api_ids: list[str]) -> set[tuple[str, str]]:
+    """이어갈 지점을 정한다.
+
+    dry-run은 무엇이 적재될지 전부 보여주는 게 목적이라 이전 기록을 따르지 않는다.
+    --restart는 기록을 지우지 않고 이번 실행에서만 무시한다. 지워버리면 중간에 죽었을 때
+    고르지 않은 API의 기록까지 사라진다.
+    """
+    if args.restart or args.dry_run:
+        return set()
+
+    completed = await _completed_keys(api_ids)
+    logger.info("이전 진행 기록 %d건을 불러왔습니다", len(completed))
+    return completed
+
+
+async def run() -> int:
+    args = _parse_args()
+    api_ids = args.api_ids or list(SOURCES)
+
+    exit_code = await _prepare(args, api_ids)
+    if exit_code is not None:
+        return exit_code
+
+    completed = await _resume_point(args, api_ids)
 
     failures: list[str] = []
     total_rows = 0
