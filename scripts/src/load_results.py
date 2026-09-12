@@ -107,6 +107,11 @@ async def _import_legacy_progress() -> int:
             # row_count는 파일 기록에 없다. 재개 판단에는 키만 쓰이므로 0으로 둔다.
             rows.append({"api_id": api_id, "yyyymm": yyyymm, "row_count": 0})
 
+    if not rows:
+        # 빈 목록을 넘기면 SQLAlchemy가 INSERT ... DEFAULT VALUES로 떨어져 NOT NULL 위반이 난다.
+        logger.warning("옮길 기록이 없습니다: %s", LEGACY_PROGRESS_PATH)
+        return 0
+
     async with session_scope() as session:
         await session.execute(pg_insert(RawLoadProgress).on_conflict_do_nothing(), rows)
 
