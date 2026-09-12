@@ -17,9 +17,6 @@ SUCCESS_RESULT_CODE = "000"
 NO_DATA_RESULT_CODE = "03"
 DAILY_LIMIT_RESULT_CODE = "22"
 
-# 법정동코드 API는 정상 응답의 결과코드가 INFO-0으로 온다.
-LEGAL_DONG_SUCCESS_PREFIX = "INFO"
-
 
 class OpenApiError(RuntimeError):
     """오픈API가 오류 결과코드를 돌려줬다."""
