@@ -26,6 +26,17 @@ def parse_deal_ymd(deal_ymd: str) -> tuple[str, str]:
     return deal_ymd[:4], deal_ymd[4:]
 
 
+def parse_raw_deal_ymd(deal_ymd: str) -> tuple[str, str]:
+    """`"202307"`을 raw 테이블에 저장된 모양인 `("2023", "7")`로 나눈다.
+
+    오픈API가 월을 `"07"`이 아니라 `"7"`로 주고 raw는 응답을 그대로 담는다. 컬럼을
+    `lpad`로 맞추면 평범한 컬럼 비교가 아니게 되어 인덱스 후보에서 빠지므로,
+    파라미터 쪽을 저장된 모양으로 맞춘다(docs/temp/refresh-unit-index.md).
+    """
+    year, month = parse_deal_ymd(deal_ymd)
+    return year, month.lstrip("0")
+
+
 def month_range(deal_ymd: str) -> tuple[date, date]:
     """계약년월을 `deal_date` 비교용 반개구간 [시작, 끝)으로 바꾼다."""
     year, month = (int(part) for part in parse_deal_ymd(deal_ymd))

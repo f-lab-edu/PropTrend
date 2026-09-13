@@ -6,11 +6,11 @@ from typing import Any
 
 import httpx
 from defusedxml.ElementTree import fromstring as safe_xml_fromstring
-from sqlalchemy import RowMapping, func, select
+from sqlalchemy import RowMapping, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..model import Base
-from .utils import parse_deal_ymd
+from .utils import parse_raw_deal_ymd
 
 # 실거래가 오픈API 8종이 공유하는 결과코드(scripts/docs/data-api/*.md의 에러 코드표).
 SUCCESS_RESULT_CODE = "000"
@@ -185,13 +185,12 @@ class RawTableCollector:
 
     async def collect(self, deal_ymd: str, sgg_cd: str | None = None) -> Sequence[RowMapping]:
         """(계약년월, 시군구) 단위의 원본 행을 모두 읽어 반환한다."""
-        year, month = parse_deal_ymd(deal_ymd)
+        year, month = parse_raw_deal_ymd(deal_ymd)
 
         table = self.model.__table__
         conditions = [
             table.c.dealYear == year,
-            # 원본 dealMonth는 "07"이 아니라 "7"로 들어온다.
-            func.lpad(table.c.dealMonth, 2, "0") == month,
+            table.c.dealMonth == month,
         ]
         if sgg_cd is not None:
             conditions.append(table.c.sggCd == sgg_cd)

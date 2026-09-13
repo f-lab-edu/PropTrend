@@ -21,10 +21,10 @@ from .base import Base, RawRecordMixin
 class RawApartSale(Base, RawRecordMixin):
     __tablename__ = "raw_apart_sale"
 
-    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
-    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
-    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
-    __table_args__ = (Index("ix_raw_apart_sale_deal_year_sgg_cd", "dealYear", "sggCd"),)
+    # 갱신 단위(계약년월, 시군구)의 조회와 삭제가 쓰는 인덱스. 세 컬럼 모두 등치
+    # 비교라 단위 조회에서는 순서가 무관하지만, dealMonth를 마지막이 아니라 sggCd 앞에
+    # 둬야 sggCd를 생략하는 전국 조회가 skip scan으로 밀리지 않는다.
+    __table_args__ = (Index("ix_raw_apart_sale_refresh_unit", "dealYear", "dealMonth", "sggCd"),)
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(60))
@@ -51,10 +51,10 @@ class RawApartSale(Base, RawRecordMixin):
 class RawApartRent(Base, RawRecordMixin):
     __tablename__ = "raw_apart_rent"
 
-    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
-    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
-    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
-    __table_args__ = (Index("ix_raw_apart_rent_deal_year_sgg_cd", "dealYear", "sggCd"),)
+    # 갱신 단위(계약년월, 시군구)의 조회와 삭제가 쓰는 인덱스. 세 컬럼 모두 등치
+    # 비교라 단위 조회에서는 순서가 무관하지만, dealMonth를 마지막이 아니라 sggCd 앞에
+    # 둬야 sggCd를 생략하는 전국 조회가 skip scan으로 밀리지 않는다.
+    __table_args__ = (Index("ix_raw_apart_rent_refresh_unit", "dealYear", "dealMonth", "sggCd"),)
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(30))
@@ -86,10 +86,10 @@ class RawApartRent(Base, RawRecordMixin):
 class RawOfficetelSale(Base, RawRecordMixin):
     __tablename__ = "raw_officetel_sale"
 
-    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
-    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
-    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
-    __table_args__ = (Index("ix_raw_officetel_sale_deal_year_sgg_cd", "dealYear", "sggCd"),)
+    # 갱신 단위(계약년월, 시군구)의 조회와 삭제가 쓰는 인덱스. 세 컬럼 모두 등치
+    # 비교라 단위 조회에서는 순서가 무관하지만, dealMonth를 마지막이 아니라 sggCd 앞에
+    # 둬야 sggCd를 생략하는 전국 조회가 skip scan으로 밀리지 않는다.
+    __table_args__ = (Index("ix_raw_officetel_sale_refresh_unit", "dealYear", "dealMonth", "sggCd"),)
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     sggNm: Mapped[str | None] = mapped_column(String(30))
@@ -114,10 +114,10 @@ class RawOfficetelSale(Base, RawRecordMixin):
 class RawOfficetelRent(Base, RawRecordMixin):
     __tablename__ = "raw_officetel_rent"
 
-    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
-    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
-    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
-    __table_args__ = (Index("ix_raw_officetel_rent_deal_year_sgg_cd", "dealYear", "sggCd"),)
+    # 갱신 단위(계약년월, 시군구)의 조회와 삭제가 쓰는 인덱스. 세 컬럼 모두 등치
+    # 비교라 단위 조회에서는 순서가 무관하지만, dealMonth를 마지막이 아니라 sggCd 앞에
+    # 둬야 sggCd를 생략하는 전국 조회가 skip scan으로 밀리지 않는다.
+    __table_args__ = (Index("ix_raw_officetel_rent_refresh_unit", "dealYear", "dealMonth", "sggCd"),)
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     sggNm: Mapped[str | None] = mapped_column(String(30))
@@ -142,10 +142,10 @@ class RawOfficetelRent(Base, RawRecordMixin):
 class RawMultiflexSale(Base, RawRecordMixin):
     __tablename__ = "raw_multiflex_sale"
 
-    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
-    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
-    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
-    __table_args__ = (Index("ix_raw_multiflex_sale_deal_year_sgg_cd", "dealYear", "sggCd"),)
+    # 갱신 단위(계약년월, 시군구)의 조회와 삭제가 쓰는 인덱스. 세 컬럼 모두 등치
+    # 비교라 단위 조회에서는 순서가 무관하지만, dealMonth를 마지막이 아니라 sggCd 앞에
+    # 둬야 sggCd를 생략하는 전국 조회가 skip scan으로 밀리지 않는다.
+    __table_args__ = (Index("ix_raw_multiflex_sale_refresh_unit", "dealYear", "dealMonth", "sggCd"),)
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(60))
@@ -172,10 +172,10 @@ class RawMultiflexSale(Base, RawRecordMixin):
 class RawMultiflexRent(Base, RawRecordMixin):
     __tablename__ = "raw_multiflex_rent"
 
-    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
-    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
-    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
-    __table_args__ = (Index("ix_raw_multiflex_rent_deal_year_sgg_cd", "dealYear", "sggCd"),)
+    # 갱신 단위(계약년월, 시군구)의 조회와 삭제가 쓰는 인덱스. 세 컬럼 모두 등치
+    # 비교라 단위 조회에서는 순서가 무관하지만, dealMonth를 마지막이 아니라 sggCd 앞에
+    # 둬야 sggCd를 생략하는 전국 조회가 skip scan으로 밀리지 않는다.
+    __table_args__ = (Index("ix_raw_multiflex_rent_refresh_unit", "dealYear", "dealMonth", "sggCd"),)
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(30))
@@ -200,10 +200,10 @@ class RawMultiflexRent(Base, RawRecordMixin):
 class RawSingleMultiFamilySale(Base, RawRecordMixin):
     __tablename__ = "raw_single_multi_family_sale"
 
-    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
-    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
-    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
-    __table_args__ = (Index("ix_raw_single_multi_family_sale_deal_year_sgg_cd", "dealYear", "sggCd"),)
+    # 갱신 단위(계약년월, 시군구)의 조회와 삭제가 쓰는 인덱스. 세 컬럼 모두 등치
+    # 비교라 단위 조회에서는 순서가 무관하지만, dealMonth를 마지막이 아니라 sggCd 앞에
+    # 둬야 sggCd를 생략하는 전국 조회가 skip scan으로 밀리지 않는다.
+    __table_args__ = (Index("ix_raw_single_multi_family_sale_refresh_unit", "dealYear", "dealMonth", "sggCd"),)
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     umdNm: Mapped[str | None] = mapped_column(String(60))
@@ -227,10 +227,10 @@ class RawSingleMultiFamilySale(Base, RawRecordMixin):
 class RawSingleMultiFamilyRent(Base, RawRecordMixin):
     __tablename__ = "raw_single_multi_family_rent"
 
-    # 가공 단계가 (계약년월, 시군구) 단위로 읽어갈 때 쓰는 인덱스. dealMonth는
-    # lpad를 거쳐 비교하므로 인덱스에 넣어도 타지 않아 뺐고, dealYear를 앞에 둬야
-    # 시군구를 생략한 전국 조회에서도 선두 컬럼이 조건에 남는다.
-    __table_args__ = (Index("ix_raw_single_multi_family_rent_deal_year_sgg_cd", "dealYear", "sggCd"),)
+    # 갱신 단위(계약년월, 시군구)의 조회와 삭제가 쓰는 인덱스. 세 컬럼 모두 등치
+    # 비교라 단위 조회에서는 순서가 무관하지만, dealMonth를 마지막이 아니라 sggCd 앞에
+    # 둬야 sggCd를 생략하는 전국 조회가 skip scan으로 밀리지 않는다.
+    __table_args__ = (Index("ix_raw_single_multi_family_rent_refresh_unit", "dealYear", "dealMonth", "sggCd"),)
 
     sggCd: Mapped[str | None] = mapped_column(String(5))
     houseType: Mapped[str | None] = mapped_column(String(6))

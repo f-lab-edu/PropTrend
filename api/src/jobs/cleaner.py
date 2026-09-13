@@ -2,11 +2,11 @@
 
 from typing import ClassVar
 
-from sqlalchemy import delete, func
+from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..model import Base, PropertyType, RentTransaction, SaleTransaction
-from .utils import month_range, parse_deal_ymd, split_sgg_cd
+from .utils import month_range, parse_raw_deal_ymd, split_sgg_cd
 
 
 class TransactionCleaner:
@@ -57,14 +57,14 @@ class RawTableCleaner:
 
     async def clean(self, deal_ymd: str, sgg_cd: str) -> int:
         """전국 삭제는 실수로 한 달치를 날릴 여지만 남기므로 열어두지 않는다."""
-        year, month = parse_deal_ymd(deal_ymd)
+        year, month = parse_raw_deal_ymd(deal_ymd)
         split_sgg_cd(sgg_cd)  # 형식 검증. raw는 sggCd를 5자리 그대로 쓴다.
         table = self.model.__table__
 
         result = await self.session.execute(
             delete(table).where(
                 table.c.dealYear == year,
-                func.lpad(table.c.dealMonth, 2, "0") == month,
+                table.c.dealMonth == month,
                 table.c.sggCd == sgg_cd,
             )
         )
