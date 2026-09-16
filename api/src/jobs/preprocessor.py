@@ -1,4 +1,4 @@
-"""raw 테이블 행을 정제 테이블 컬럼으로 바꾸는 전처리기."""
+"""bronze payload를 정제 테이블 컬럼으로 바꾸는 전처리기."""
 
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -23,30 +23,30 @@ ROAD_ADDRESS_FIELDS = (
 
 
 class RawTablePreprocessor(ABC):
-    """raw 테이블 8종의 공통 변환기. 유형별 차이는 건물명 필드뿐이라 주입받는다."""
+    """실거래가 8종의 공통 변환기. 유형별 차이는 건물명 필드뿐이라 주입받는다."""
 
     def __init__(
         self,
         property_type: PropertyType,
-        table_name: str,
+        api_id: str,
         building_name_field: str | None = None,
     ) -> None:
         self.property_type = property_type
-        self.table_name = table_name
+        self.api_id = api_id
         self.building_name_field = building_name_field
 
     def preprocess(self, rows: Sequence[RowMapping]) -> list[dict[str, Any]]:
-        """raw 행을 정제 테이블 컬럼명 dict 목록으로 바꾼다."""
-        return [self._convert(row) for row in rows]
+        """수집기가 준 `id`/`payload` 매핑을 정제 테이블 컬럼명 dict 목록으로 바꾼다."""
+        return [self._convert(row["id"], row["payload"]) for row in rows]
 
-    def _convert(self, row: RowMapping) -> dict[str, Any]:
-        """행 하나를 변환한다. 실패하면 어느 테이블 어느 행인지 붙여 다시 던진다."""
+    def _convert(self, raw_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+        """행 하나를 변환한다. 실패하면 어느 API 어느 bronze 행인지 붙여 다시 던진다."""
         try:
-            return self._common(row) | self._specific(row)
+            return self._common(payload) | self._specific(payload)
         except (ValueError, InvalidOperation) as error:
-            raise ValueError(f"{self.table_name} 행을 가공할 수 없다(id={row.get('id')}): {error}") from error
+            raise ValueError(f"{self.api_id} 가공 실패(rtms_raw_items.id={raw_id}): {error}") from error
 
-    def _common(self, row: RowMapping) -> dict[str, Any]:
+    def _common(self, row: dict[str, Any]) -> dict[str, Any]:
         """매매·전월세가 함께 쓰는 컬럼을 채운다(draft.md 2절)."""
         sido_code, sigungu_code = split_sgg_cd(_required(row, "sggCd"))
         building_name = _text(row.get(self.building_name_field)) if self.building_name_field else None
@@ -70,14 +70,14 @@ class RawTablePreprocessor(ABC):
         }
 
     @abstractmethod
-    def _specific(self, row: RowMapping) -> dict[str, Any]:
+    def _specific(self, row: dict[str, Any]) -> dict[str, Any]:
         """매매/전월세 각각의 고유 컬럼을 채운다."""
 
 
 class SalePreprocessor(RawTablePreprocessor):
-    """매매 raw 4종을 `sale_transaction` 행으로 바꾼다."""
+    """매매 4종의 payload를 `sale_transaction` 행으로 바꾼다."""
 
-    def _specific(self, row: RowMapping) -> dict[str, Any]:
+    def _specific(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "plottage_area": _decimal(row.get("plottageAr")),
             "land_area": _decimal(row.get("landAr")),
@@ -96,9 +96,9 @@ class SalePreprocessor(RawTablePreprocessor):
 
 
 class RentPreprocessor(RawTablePreprocessor):
-    """전월세 raw 4종을 `rent_transaction` 행으로 바꾼다."""
+    """전월세 4종의 payload를 `rent_transaction` 행으로 바꾼다."""
 
-    def _specific(self, row: RowMapping) -> dict[str, Any]:
+    def _specific(self, row: dict[str, Any]) -> dict[str, Any]:
         return {
             "deposit": _amount(_required(row, "deposit")),
             "monthly_rent": _amount(_required(row, "monthlyRent")),
@@ -121,9 +121,13 @@ def _text(value: str | None) -> str | None:
     return value.strip() or None
 
 
-def _required(row: RowMapping, field: str) -> str:
-    """비어 있으면 안 되는 필드를 읽는다. 비어 있으면 예외를 던진다."""
-    value = _text(row[field])
+def _required(row: dict[str, Any], field: str) -> str:
+    """비어 있으면 안 되는 필드를 읽는다. 비어 있으면 예외를 던진다.
+
+    payload에는 키 자체가 없을 수 있다. `row[field]`로 읽으면 `KeyError`가 나는데
+    `_convert`가 잡지 않는 예외라 단위 전체가 터진다. 없는 키를 빈 값과 같게 다룬다.
+    """
+    value = _text(row.get(field))
     if value is None:
         raise ValueError(f"{field}가 비어 있다")
     return value
@@ -161,7 +165,7 @@ def _short_date(value: str | None) -> date | None:
     return date(2000 + int(year), int(month), int(day))
 
 
-def _road_address(row: RowMapping) -> dict[str, str] | None:
+def _road_address(row: dict[str, Any]) -> dict[str, str] | None:
     """아파트 전월세 전용 도로명 7개 필드를 컬럼 대신 dict 하나로 묶는다(draft.md 1절)."""
     detail = {field: value for field in ROAD_ADDRESS_FIELDS if (value := _text(row.get(field))) is not None}
     return detail or None

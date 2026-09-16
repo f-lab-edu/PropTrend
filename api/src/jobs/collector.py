@@ -1,4 +1,4 @@
-"""오픈API와 raw 테이블에서 데이터를 읽어오는 수집기."""
+"""오픈API와 bronze 테이블에서 데이터를 읽어오는 수집기."""
 
 import os
 from collections.abc import Sequence
@@ -9,8 +9,8 @@ from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 from sqlalchemy import RowMapping, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..model import Base
-from .utils import parse_raw_deal_ymd
+from ..model import RTMSRawItem
+from .utils import parse_deal_ymd, split_sgg_cd
 
 # 실거래가 오픈API 8종이 공유하는 결과코드(scripts/docs/data-api/*.md의 에러 코드표).
 SUCCESS_RESULT_CODE = "000"
@@ -176,26 +176,30 @@ class RtmsDataCollector:
         }
 
 
-class RawTableCollector:
-    """raw 테이블 하나에서 갱신 단위만큼 원본 행을 읽어오는 수집기."""
+class RTMSRawItemCollector:
+    """rtms_raw_items에서 갱신 단위만큼 bronze 행을 읽어오는 수집기."""
 
-    def __init__(self, session: AsyncSession, model: type[Base]) -> None:
+    def __init__(self, session: AsyncSession, api_id: str) -> None:
         self.session = session
-        self.model = model
+        self.api_id = api_id
 
-    async def collect(self, deal_ymd: str, sgg_cd: str | None = None) -> Sequence[RowMapping]:
-        """(계약년월, 시군구) 단위의 원본 행을 모두 읽어 반환한다."""
-        year, month = parse_raw_deal_ymd(deal_ymd)
+    async def collect(self, deal_ymd: str, lawd_cd: str | None = None) -> Sequence[RowMapping]:
+        """갱신 단위의 bronze 행을 `id`/`payload` 매핑으로 읽는다. `lawd_cd`를 생략하면 전국이다."""
+        # 적재기가 넣은 요청 파라미터 원형("202307")과 같은 모양으로 비교한다.
+        parse_deal_ymd(deal_ymd)
 
-        table = self.model.__table__
+        table = RTMSRawItem.__table__
         conditions = [
-            table.c.dealYear == year,
-            table.c.dealMonth == month,
+            table.c.api_id == self.api_id,
+            table.c.deal_ymd == deal_ymd,
         ]
-        if sgg_cd is not None:
-            conditions.append(table.c.sggCd == sgg_cd)
+        if lawd_cd is not None:
+            split_sgg_cd(lawd_cd)  # 형식 검증. 5자리를 쪼개지 않고 그대로 쓴다.
+            conditions.append(table.c.lawd_cd == lawd_cd)
 
-        result = await self.session.execute(select(table).where(*conditions))
+        # payload를 펼치지 않고 그대로 넘긴다. 전처리기가 오류 행을 짚으려면 bronze id가
+        # payload 밖에 따로 있어야 한다. 응답에 id 필드가 생겨도 덮이지 않는다.
+        result = await self.session.execute(select(table.c.id, table.c.payload).where(*conditions))
         return result.mappings().all()
 
 

@@ -1,4 +1,4 @@
-"""raw 8종 테이블을 가공해 채우는 실거래 정제 테이블 모델.
+"""rtms_raw_items(bronze)를 가공해 채우는 실거래 정제 테이블 모델.
 
 설계 근거는 `scripts/docs/schema/draft.md`. 요약하면,
 
@@ -6,7 +6,7 @@
   (`sale_transactions` / `rent_transactions`).
 - 부동산 유형 4종(아파트/오피스텔/연립다세대/단독·다가구)은 `property_type`
   컬럼으로 한 테이블 안에서 구분하고, 유형별 고유 필드는 nullable 컬럼으로 둔다.
-- raw 계층이 문자열 그대로 적재한 값을 이 계층에서 타입·단위까지 정규화한다.
+- bronze 계층이 문자열 그대로 보관한 값을 이 계층에서 타입·단위까지 정규화한다.
   (지역코드 5자리 → 시도 2 + 시군구 3 분리, 계약일 3필드 → `DATE` 1개,
   금액 문자열 `"36,900"` → 원 단위 `BIGINT`, 빈 문자열 → `NULL`)
 """
@@ -34,7 +34,7 @@ from .base import Base
 
 
 class PropertyType(StrEnum):
-    """부동산 유형. 어느 raw 테이블에서 넘어온 행인지를 구분한다."""
+    """부동산 유형. 어느 오픈API에서 넘어온 행인지를 구분한다."""
 
     APT = "APT"
     OFFICETEL = "OFFICETEL"
@@ -57,7 +57,7 @@ PropertyTypeColumn = Enum(
 class TransactionMixin:
     """매매/전월세 테이블이 공유하는 컬럼(draft.md 2절).
 
-    raw 테이블과 달리 이 계층은 가공을 마친 값만 받으므로, 모든 유형에 반드시
+    bronze 계층과 달리 이 계층은 가공을 마친 값만 받으므로, 모든 유형에 반드시
     존재하는 컬럼은 NOT NULL로 잠근다. 특정 유형에만 있는 필드는 nullable이며
     주석에 어느 유형에서 채워지는지를 적어둔다.
 
@@ -89,7 +89,7 @@ class TransactionMixin:
     house_type: Mapped[str | None] = mapped_column(String(10), sort_order=-1)
 
     # 원본 sggCd 5자리를 시도 2자리 + 시군구 3자리로 분리한 값.
-    # raw_legal_dong_code의 sido_cd/sgg_cd와 자릿수가 그대로 맞아 변환 없이 조인된다.
+    # legal_dong_code_raw_items의 payload(sido_cd/sgg_cd)와 자릿수가 맞아 변환 없이 대응된다.
     sido_code: Mapped[str] = mapped_column(CHAR(2), sort_order=-1)
     sigungu_code: Mapped[str] = mapped_column(CHAR(3), sort_order=-1)
 
@@ -118,8 +118,8 @@ class TransactionMixin:
 class SaleTransaction(Base, TransactionMixin):
     """매매 실거래(draft.md 3절).
 
-    출처: raw_apart_sale / raw_officetel_sale / raw_multiflex_sale /
-    raw_single_multi_family_sale.
+    출처: rtms_raw_items의 api_id가 apart_sale / officetel_sale / multiflex_sale /
+    single_multi_family_sale인 행.
     """
 
     __tablename__ = "sale_transactions"
@@ -159,8 +159,8 @@ class SaleTransaction(Base, TransactionMixin):
 class RentTransaction(Base, TransactionMixin):
     """전월세 실거래(draft.md 4절).
 
-    출처: raw_apart_rent / raw_officetel_rent / raw_multiflex_rent /
-    raw_single_multi_family_rent.
+    출처: rtms_raw_items의 api_id가 apart_rent / officetel_rent / multiflex_rent /
+    single_multi_family_rent인 행.
     """
 
     __tablename__ = "rent_transactions"
