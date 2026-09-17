@@ -150,7 +150,9 @@ class RtmsDataCollector:
                 rows.extend(page["rows"])
 
         # 거래 없는 달도 0건으로 완료가 남아야 아예 돌지 않은 것과 구분된다.
-        logger.debug("부동산 실거래 API 데이터 수집 완료", extra={"stage": "collect_api", "pages": page_no, "rows": len(rows)})
+        logger.debug(
+            "부동산 실거래 API 데이터 수집 완료", extra={"stage": "collect_api", "pages": page_no, "rows": len(rows)}
+        )
         return rows
 
     async def _fetch_page(self, client: httpx.AsyncClient, page_no: int) -> dict[str, Any]:
