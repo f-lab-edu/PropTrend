@@ -24,6 +24,7 @@ from .collector import (
     RtmsDataCollector,
     RTMSRawItemCollector,
 )
+from .context import unit_context
 from .loader import (
     LegalDongCodeRawItemLoader,
     RentTransactionLoader,
@@ -274,24 +275,27 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
             if stop.is_set():
                 summary["skipped"] += 1
                 return
-            try:
-                result = await refresh_unit(spec, lawd_cd, deal_ymd)
-            except DailyLimitReachedError:
-                # 남은 단위도 전부 같은 응답을 받는다. 여기서 접고 내일 회차에 맡긴다.
-                stop.set()
-                summary["daily_limit"] += 1
-                logger.warning("일일 호출 제한 도달, 남은 단위를 건너뛴다: %s %s %s", spec.name, lawd_cd, deal_ymd)
-            except SilverStageError:
-                # bronze에는 응답이 남았다. 재수집 없이 다시 돌리면 되므로 따로 센다.
-                summary["silver_failed"] += 1
-                logger.exception("정제 실패(bronze 보존): %s %s %s", spec.name, lawd_cd, deal_ymd)
-            except Exception:
-                # 단위 1건은 트랜잭션째 되돌아가므로 나머지를 멈추지 않고 넘어간다.
-                summary["failed"] += 1
-                logger.exception("갱신 실패: %s %s %s", spec.name, lawd_cd, deal_ymd)
-            else:
-                summary["succeeded"] += 1
-                summary["loaded"] += result.loaded
+            # 이 블록 안의 로그에는 좌표가 자동으로 붙는다. 수집기·적재기처럼 좌표를 모르는
+            # 하위 모듈의 로그도 함께 짚을 수 있다.
+            with unit_context(spec.api_id, lawd_cd, deal_ymd):
+                try:
+                    result = await refresh_unit(spec, lawd_cd, deal_ymd)
+                except DailyLimitReachedError:
+                    # 남은 단위도 전부 같은 응답을 받는다. 여기서 접고 내일 회차에 맡긴다.
+                    stop.set()
+                    summary["daily_limit"] += 1
+                    logger.warning("일일 호출 제한 도달, 남은 단위를 건너뛴다")
+                except SilverStageError:
+                    # bronze에는 응답이 남았다. 재수집 없이 다시 돌리면 되므로 따로 센다.
+                    summary["silver_failed"] += 1
+                    logger.exception("정제 실패(bronze 보존)")
+                except Exception:
+                    # 단위 1건은 트랜잭션째 되돌아가므로 나머지를 멈추지 않고 넘어간다.
+                    summary["failed"] += 1
+                    logger.exception("갱신 실패")
+                else:
+                    summary["succeeded"] += 1
+                    summary["loaded"] += result.loaded
 
     await asyncio.gather(*(run(*unit) for unit in units))
 
