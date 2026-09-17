@@ -20,6 +20,15 @@ uvx --no-build "ruff@${RUFF_VERSION}" format --check . || status=1
 echo "==> ruff check"
 uvx --no-build "ruff@${RUFF_VERSION}" check . || status=1
 
+echo "==> 파이프라인 경계 (파이프라인·모델 계층이 웹 계층을 참조하지 않는다)"
+# 파이프라인은 API 서버와 별개 프로세스로 돈다. 같은 패키지 안에 있어 임포트를 막는
+# 것이 없으므로, 웹 계층으로 되돌아가는 의존이 생기지 않았는지 여기서 확인한다.
+if grep -rnE --include="*.py" "fastapi|starlette|from \\.\\.?main\\b" \
+    api/src/jobs api/src/model api/src/db.py; then
+    echo "위 파일은 웹 계층과 무관해야 합니다. 임포트를 걷어내세요."
+    status=1
+fi
+
 echo "==> jscpd (중복 코드)"
 npx --ignore-scripts --yes "jscpd@${JSCPD_VERSION}" . || status=1
 

@@ -1,7 +1,7 @@
 """PostgreSQL 비동기 세션 구성"""
 
 import os
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
@@ -35,7 +35,7 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 
 
 @asynccontextmanager
-async def session_scope() -> AsyncIterator[AsyncSession]:
+async def session_scope() -> AsyncGenerator[AsyncSession]:
     """데이터베이스 세션 제공 함수"""
     async with get_session_factory()() as session, session.begin():
         yield session

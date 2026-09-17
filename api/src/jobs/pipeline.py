@@ -40,11 +40,14 @@ logger = logging.getLogger(__name__)
 # 신고 기한 30일과 뒤늦은 해제·정정 때문에 지난 달 데이터도 계속 바뀐다.
 DEFAULT_MONTHS = 2
 
-# 갱신 단위 수가 개월 수에 비례하므로 상한을 둔다. 수동 실행 요청도 이 값으로 검증된다.
+# 갱신 단위 수가 개월 수에 비례하므로 상한을 둔다. --months 인자도 이 값으로 검증된다.
 MAX_MONTHS = 24
 
 # 단위마다 세션을 하나씩 쓰므로 커넥션 풀 크기(기본 pool_size=5)를 넘기면 안 된다.
 DEFAULT_CONCURRENCY = 4
+
+# 풀을 넉넉히 잡아도 오픈API 쪽이 먼저 막힌다. --concurrency 인자도 이 값으로 검증된다.
+MAX_CONCURRENCY = 8
 
 
 class SilverStageError(RuntimeError):
@@ -218,7 +221,7 @@ async def sigungu_codes() -> list[str]:
 
 def recent_months(months: int = DEFAULT_MONTHS, today: date | None = None) -> list[str]:
     """이번 달부터 과거로 `months`개월의 계약년월을 최신순으로 만든다."""
-    # 수동 실행 요청이 흘러드는 값이다. 지금은 RefreshRequest가 같은 범위로 막고 있지만,
+    # 명령줄 인자가 흘러드는 값이다. 지금은 __main__이 같은 범위로 막고 있지만,
     # 반복 횟수를 정하는 값의 범위는 쓰는 쪽이 아니라 여기서 보장해야 한다.
     if not 1 <= months <= MAX_MONTHS:
         raise ValueError(f"months는 1~{MAX_MONTHS} 범위여야 한다: {months}")
