@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import time
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -48,6 +49,11 @@ DEFAULT_CONCURRENCY = 4
 
 # 풀을 넉넉히 잡아도 오픈API 쪽이 먼저 막힌다. --concurrency 인자도 이 값으로 검증된다.
 MAX_CONCURRENCY = 8
+
+
+def _elapsed_ms(started: float) -> dict[str, int]:
+    """로그 extra에 실을 경과 시간."""
+    return {"elapsed_ms": round((time.perf_counter() - started) * 1000)}
 
 
 class SilverStageError(RuntimeError):
@@ -181,6 +187,8 @@ async def refresh_unit(spec: PipelineSpec, lawd_cd: str, deal_ymd: str) -> UnitR
     async with session_scope() as session:
         raw_deleted = await RTMSRawItemCleaner(session, spec.api_id).clean(deal_ymd, lawd_cd)
         raw_loaded = await RTMSRawItemLoader(session, spec.api_id).load(lawd_cd, deal_ymd, items)
+    # 하위 모듈의 로그는 커밋 전에 나간다. 이 줄이 있어야 T1이 실제로 확정됐다는 뜻이 된다.
+    logger.debug("bronze 확정", extra={"stage": "commit_bronze", "deleted": raw_deleted, "loaded": raw_loaded})
 
     # T2. 여기서 터져도 bronze는 남아 API 재호출 없이 다시 돌릴 수 있다.
     try:
@@ -195,6 +203,7 @@ async def refresh_unit(spec: PipelineSpec, lawd_cd: str, deal_ymd: str) -> UnitR
     except Exception as error:
         raise SilverStageError(f"정제 단계 실패(bronze {raw_loaded}건은 남아 있다): {error}") from error
 
+    logger.debug("정제 확정", extra={"stage": "commit_silver", "deleted": deleted, "loaded": loaded})
     return UnitResult(spec.name, lawd_cd, deal_ymd, raw_deleted, raw_loaded, deleted, loaded)
 
 
@@ -204,9 +213,9 @@ async def refresh_legal_dong_codes() -> int:
     items = await LegalDongCodeCollector().collect()
     # 비우기와 채우기는 한 트랜잭션이어야 한다. 사이에서 끊기면 시군구 목록이 사라진다.
     async with session_scope() as session:
-        await LegalDongCodeRawItemCleaner(session).clean()
+        deleted = await LegalDongCodeRawItemCleaner(session).clean()
         loaded = await LegalDongCodeRawItemLoader(session).load(items)
-    logger.info("법정동코드 %d건 갱신", loaded)
+    logger.info("법정동코드 %d건 갱신", loaded, extra={"stage": "legal_dong", "deleted": deleted, "loaded": loaded})
     return loaded
 
 
@@ -247,6 +256,7 @@ def iter_units(sgg_list: Sequence[str], month_list: Sequence[str]) -> Iterator[t
 
 async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_CONCURRENCY) -> dict[str, int]:
     """하루치 갱신 전체. 스케줄러에 등록되는 작업은 이 함수 하나다."""
+    run_started = time.perf_counter()
     await refresh_legal_dong_codes()
     sgg_list = await sigungu_codes()
     month_list = recent_months(months)
@@ -258,6 +268,14 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
         len(month_list),
         len(PIPELINES),
         len(units),
+        extra={
+            "stage": "refresh_start",
+            "sigungu": len(sgg_list),
+            "months": len(month_list),
+            "specs": len(PIPELINES),
+            "units": len(units),
+            "concurrency": concurrency,
+        },
     )
 
     semaphore = asyncio.Semaphore(concurrency)
@@ -274,31 +292,44 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
 
     async def run(spec: PipelineSpec, lawd_cd: str, deal_ymd: str) -> None:
         async with semaphore:
-            # 슬롯을 기다리는 사이에 제한에 걸렸을 수 있다. 남은 단위는 슬롯만 스치고 끝난다.
-            if stop.is_set():
-                summary["skipped"] += 1
-                return
             # 이 블록 안의 로그에는 좌표가 자동으로 붙는다. 수집기·적재기처럼 좌표를 모르는
             # 하위 모듈의 로그도 함께 짚을 수 있다.
             with unit_context(spec.api_id, lawd_cd, deal_ymd):
+                # 슬롯을 기다리는 사이에 제한에 걸렸을 수 있다. 남은 단위는 슬롯만 스치고 끝난다.
+                if stop.is_set():
+                    summary["skipped"] += 1
+                    logger.debug("건너뜀(일일 제한)", extra={"stage": "skip"})
+                    return
+
+                started = time.perf_counter()
                 try:
                     result = await refresh_unit(spec, lawd_cd, deal_ymd)
                 except DailyLimitReachedError:
                     # 남은 단위도 전부 같은 응답을 받는다. 여기서 접고 내일 회차에 맡긴다.
                     stop.set()
                     summary["daily_limit"] += 1
-                    logger.warning("일일 호출 제한 도달, 남은 단위를 건너뛴다")
+                    logger.warning("일일 호출 제한 도달, 남은 단위를 건너뛴다", extra=_elapsed_ms(started))
                 except SilverStageError:
                     # bronze에는 응답이 남았다. 재수집 없이 다시 돌리면 되므로 따로 센다.
                     summary["silver_failed"] += 1
-                    logger.exception("정제 실패(bronze 보존)")
+                    logger.exception("정제 실패(bronze 보존)", extra=_elapsed_ms(started))
                 except Exception:
                     # 단위 1건은 트랜잭션째 되돌아가므로 나머지를 멈추지 않고 넘어간다.
                     summary["failed"] += 1
-                    logger.exception("갱신 실패")
+                    logger.exception("갱신 실패", extra=_elapsed_ms(started))
                 else:
                     summary["succeeded"] += 1
                     summary["loaded"] += result.loaded
+                    logger.info(
+                        "단위 완료",
+                        extra=_elapsed_ms(started)
+                        | {
+                            "raw_deleted": result.raw_deleted,
+                            "raw_loaded": result.raw_loaded,
+                            "deleted": result.deleted,
+                            "loaded": result.loaded,
+                        },
+                    )
 
     await asyncio.gather(*(run(*unit) for unit in units))
 
@@ -309,8 +340,13 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
         summary["silver_failed"],
         summary["skipped"],
         summary["loaded"],
+        extra=summary | {"stage": "refresh_end"} | _elapsed_ms(run_started),
     )
     if summary["daily_limit"]:
         # 사유는 사람이 읽는 로그에 남긴다. summary는 dict[str, int]라 문자열을 담을 수 없다.
-        logger.warning("일일 호출 제한으로 %d단위를 남기고 중단했다", summary["skipped"])
+        logger.warning(
+            "일일 호출 제한으로 %d단위를 남기고 중단했다",
+            summary["skipped"],
+            extra={"stage": "daily_limit", "skipped": summary["skipped"], "daily_limit": summary["daily_limit"]},
+        )
     return summary

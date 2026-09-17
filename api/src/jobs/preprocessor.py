@@ -1,5 +1,6 @@
 """bronze payload를 정제 테이블 컬럼으로 바꾸는 전처리기."""
 
+import logging
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
 from datetime import date
@@ -10,6 +11,8 @@ from sqlalchemy import RowMapping
 
 from ..model import PropertyType
 from .utils import split_sgg_cd
+
+logger = logging.getLogger(__name__)
 
 ROAD_ADDRESS_FIELDS = (
     "roadnm",
@@ -37,7 +40,10 @@ class RawTablePreprocessor(ABC):
 
     def preprocess(self, rows: Sequence[RowMapping]) -> list[dict[str, Any]]:
         """수집기가 준 `id`/`payload` 매핑을 정제 테이블 컬럼명 dict 목록으로 바꾼다."""
-        return [self._convert(row["id"], row["payload"]) for row in rows]
+        payload = [self._convert(row["id"], row["payload"]) for row in rows]
+        # 한 행이라도 실패하면 _convert가 예외를 올려 단위가 끝난다. 이 줄은 곧 전량 성공이다.
+        logger.debug("부동산 실거래 bronze 데이터 가공 완료", extra={"stage": "preprocess", "rows": len(payload)})
+        return payload
 
     def _convert(self, raw_id: int, payload: dict[str, Any]) -> dict[str, Any]:
         """행 하나를 변환한다. 실패하면 어느 API 어느 bronze 행인지 붙여 다시 던진다."""

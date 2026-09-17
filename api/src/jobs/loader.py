@@ -51,15 +51,21 @@ class RTMSRawItemLoader:
 
     async def load(self, lawd_cd: str, deal_ymd: str, items: list[dict[str, Any]]) -> int:
         """응답 item을 한 건도 거르지 않고 넣고, 실제로 넣은 수를 반환한다."""
-        if not items:
-            return 0
+        # 빈 목록에 드리프트 검사를 돌리면 기준선 전 필드가 사라진 것으로 보여 오경보가 난다.
+        if items:
+            _warn_schema_drift(self.api_id, items, RTMS_KNOWN_FIELDS[self.api_id])
 
-        _warn_schema_drift(self.api_id, items, RTMS_KNOWN_FIELDS[self.api_id])
+            # 갱신 단위 키는 응답이 아니라 요청 파라미터에서 온다. collected_at은 server_default에
+            # 맡기려고 키 자체를 넣지 않는다(None을 넣으면 기본값을 덮어 NOT NULL 위반이 난다).
+            rows = [
+                {"api_id": self.api_id, "lawd_cd": lawd_cd, "deal_ymd": deal_ymd, "payload": item} for item in items
+            ]
+            loaded = await _insert_chunked(self.session, RTMSRawItem.__table__, rows)
+        else:
+            loaded = 0
 
-        # 갱신 단위 키는 응답이 아니라 요청 파라미터에서 온다. collected_at은 server_default에
-        # 맡기려고 키 자체를 넣지 않는다(None을 넣으면 기본값을 덮어 NOT NULL 위반이 난다).
-        rows = [{"api_id": self.api_id, "lawd_cd": lawd_cd, "deal_ymd": deal_ymd, "payload": item} for item in items]
-        return await _insert_chunked(self.session, RTMSRawItem.__table__, rows)
+        logger.debug("부동산 실거래 bronze 데이터 적재 완료", extra={"stage": "load_bronze", "loaded": loaded})
+        return loaded
 
 
 class LegalDongCodeRawItemLoader:
@@ -69,13 +75,16 @@ class LegalDongCodeRawItemLoader:
         self.session = session
 
     async def load(self, items: list[dict[str, Any]]) -> int:
-        if not items:
-            return 0
+        if items:
+            _warn_schema_drift("legal_dong_code", items, LEGAL_DONG_CODE_KNOWN_FIELDS)
 
-        _warn_schema_drift("legal_dong_code", items, LEGAL_DONG_CODE_KNOWN_FIELDS)
+            rows = [{"payload": item} for item in items]
+            loaded = await _insert_chunked(self.session, LegalDongCodeRawItem.__table__, rows)
+        else:
+            loaded = 0
 
-        rows = [{"payload": item} for item in items]
-        return await _insert_chunked(self.session, LegalDongCodeRawItem.__table__, rows)
+        logger.debug("법정동코드 bronze 적재 완료", extra={"stage": "load_legal_dong", "loaded": loaded})
+        return loaded
 
 
 class TransactionLoader:
@@ -90,19 +99,25 @@ class TransactionLoader:
         )
 
     async def load(self, rows: list[dict[str, Any]]) -> int:
-        if not rows:
-            return 0
+        if rows:
+            # 전처리기가 리터럴 dict 하나로 모든 행을 만들므로 첫 행만 검사하면 충분하다.
+            keys = rows[0].keys()
+            if keys != self.columns:
+                raise ValueError(
+                    f"적재 row의 키가 {self.model.__tablename__} 컬럼과 다르다: "
+                    f"모르는 키={sorted(keys - self.columns)}, "
+                    f"빠진 키={sorted(self.columns - keys)}"
+                )
 
-        # 전처리기가 리터럴 dict 하나로 모든 행을 만들므로 첫 행만 검사하면 충분하다.
-        keys = rows[0].keys()
-        if keys != self.columns:
-            raise ValueError(
-                f"적재 row의 키가 {self.model.__tablename__} 컬럼과 다르다: "
-                f"모르는 키={sorted(keys - self.columns)}, "
-                f"빠진 키={sorted(self.columns - keys)}"
-            )
+            loaded = await _insert_chunked(self.session, self.model.__table__, rows)
+        else:
+            loaded = 0
 
-        return await _insert_chunked(self.session, self.model.__table__, rows)
+        logger.debug(
+            "부동산 실거래 silver 데이터 적재 완료",
+            extra={"stage": "load_silver", "table": self.model.__tablename__, "loaded": loaded},
+        )
+        return loaded
 
 
 class SaleTransactionLoader(TransactionLoader):

@@ -20,6 +20,9 @@ TEXT_FORMAT = "%(asctime)s %(levelname)-8s %(name)s %(message)s"
 MAX_BYTES = 10 * 1024 * 1024
 BACKUP_COUNT = 5
 
+# 루트 레벨과 무관하게 WARNING으로 고정하는 서드파티 로거.
+NOISY_LOGGERS = ("httpx", "httpcore")
+
 # LogRecord가 기본으로 들고 있는 속성. 여기에 없는 것만 extra나 필터가 붙인 값으로 본다.
 _RESERVED = frozenset(
     (
@@ -165,5 +168,7 @@ def configure_logging(
             handler.addFilter(log_filter)
 
     # httpx는 INFO에서 요청 URL을 통째로 남기는데, 실거래가 API는 serviceKey를
-    # 쿼리스트링으로 받으므로 그대로 두면 인증키가 로그에 찍힌다.
-    logging.getLogger("httpx").setLevel(logging.WARNING)
+    # 쿼리스트링으로 받으므로 그대로 두면 인증키가 로그에 찍힌다. 그 아래 httpcore는
+    # DEBUG에서 연결·헤더를 단위마다 16줄씩 뱉어 정작 파이프라인 단계 로그를 덮는다.
+    for name in NOISY_LOGGERS:
+        logging.getLogger(name).setLevel(logging.WARNING)

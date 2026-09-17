@@ -1,5 +1,6 @@
 """오픈API와 bronze 테이블에서 데이터를 읽어오는 수집기."""
 
+import logging
 import os
 from collections.abc import Sequence
 from typing import Any
@@ -12,10 +13,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..model import RTMSRawItem
 from .utils import parse_deal_ymd, split_sgg_cd
 
-# 실거래가 오픈API 8종이 공유하는 결과코드(scripts/docs/data-api/*.md의 에러 코드표).
+# 실거래가 오픈API 8종이 공유하는 결과코드.
 SUCCESS_RESULT_CODE = "000"
 NO_DATA_RESULT_CODE = "03"
 DAILY_LIMIT_RESULT_CODE = "22"
+
+logger = logging.getLogger(__name__)
 
 
 class OpenApiError(RuntimeError):
@@ -83,6 +86,7 @@ class LegalDongCodeCollector:
             # 시군구 목록을 잃는다.
             raise OpenApiError("법정동코드 응답에 시군구 행이 없다")
 
+        logger.debug("법정동코드 수집 완료", extra={"stage": "collect_legal_dong", "pages": page_no, "rows": len(rows)})
         return rows
 
     @staticmethod
@@ -122,7 +126,7 @@ class LegalDongCodeCollector:
 
 
 class RtmsDataCollector:
-    """국토교통부 실거래가 오픈API(RTMSDataSvc*) 8종의 공통 수집기. URL만 갈아 끼운다."""
+    """국토교통부 실거래가 오픈API(RTMSDataSvc*) 8종의 공통 수집기."""
 
     MAX_ROWS_PER_PAGE = 10000
     TIMEOUT = 10
@@ -135,17 +139,18 @@ class RtmsDataCollector:
     async def collect(self) -> list[dict[str, Any]]:
         async with httpx.AsyncClient(timeout=self.TIMEOUT) as client:
             page = await self._fetch_page(client, 1)
-            # 해당 시군구·계약년월에 거래가 없는 달은 정상이다. 빈 목록으로 갱신하면 그만이다.
-            if page["resultCode"] == NO_DATA_RESULT_CODE:
-                return []
-
-            rows = list(page["rows"])
             page_no = 1
-            while page_no * self.MAX_ROWS_PER_PAGE < _to_int(page["totalCount"]):
+            # 해당 시군구·계약년월에 거래가 없는 달은 정상이다. 빈 목록으로 갱신하면 그만이다.
+            no_data = page["resultCode"] == NO_DATA_RESULT_CODE
+            rows: list[dict[str, Any]] = [] if no_data else list(page["rows"])
+
+            while not no_data and page_no * self.MAX_ROWS_PER_PAGE < _to_int(page["totalCount"]):
                 page_no += 1
                 page = await self._fetch_page(client, page_no)
                 rows.extend(page["rows"])
 
+        # 거래 없는 달도 0건으로 완료가 남아야 아예 돌지 않은 것과 구분된다.
+        logger.debug("부동산 실거래 API 데이터 수집 완료", extra={"stage": "collect_api", "pages": page_no, "rows": len(rows)})
         return rows
 
     async def _fetch_page(self, client: httpx.AsyncClient, page_no: int) -> dict[str, Any]:
@@ -200,7 +205,9 @@ class RTMSRawItemCollector:
         # payload를 펼치지 않고 그대로 넘긴다. 전처리기가 오류 행을 짚으려면 bronze id가
         # payload 밖에 따로 있어야 한다. 응답에 id 필드가 생겨도 덮이지 않는다.
         result = await self.session.execute(select(table.c.id, table.c.payload).where(*conditions))
-        return result.mappings().all()
+        rows = result.mappings().all()
+        logger.debug("부동산 실거래 bronze 수집 완료", extra={"stage": "read_bronze", "rows": len(rows)})
+        return rows
 
 
 def _to_int(value: str | None) -> int:

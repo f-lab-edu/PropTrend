@@ -1,5 +1,6 @@
 """재적재에 앞서 갱신 단위의 기존 데이터를 지우는 정리기."""
 
+import logging
 from typing import ClassVar
 
 from sqlalchemy import delete
@@ -14,6 +15,8 @@ from ..model import (
     SaleTransaction,
 )
 from .utils import month_range, parse_deal_ymd, split_sgg_cd
+
+logger = logging.getLogger(__name__)
 
 
 class TransactionCleaner:
@@ -40,6 +43,10 @@ class TransactionCleaner:
             conditions.append(table.c.sigungu_code == sigungu_code)
 
         result = await self.session.execute(delete(table).where(*conditions))
+        logger.debug(
+            "부동산 실거래 silver 데이터 단위 정리 완료",
+            extra={"stage": "clean_silver", "table": self.model.__tablename__, "deleted": result.rowcount},
+        )
         return result.rowcount
 
 
@@ -77,6 +84,7 @@ class RTMSRawItemCleaner:
                 table.c.lawd_cd == lawd_cd,
             )
         )
+        logger.debug("부동산 실거래 bronze 데이터 단위 정리 완료", extra={"stage": "clean_bronze", "deleted": result.rowcount})
         return result.rowcount
 
 
@@ -90,4 +98,5 @@ class LegalDongCodeRawItemCleaner:
         # 갱신 단위 키가 없는 API라 전량 교체뿐이다. 비운 직후 같은 트랜잭션에서 반드시
         # 다시 채워야 한다. 시군구 목록의 출처라 비어 있으면 이후 갱신이 통째로 멈춘다.
         result = await self.session.execute(delete(LegalDongCodeRawItem.__table__))
+        logger.debug("법정동코드 bronze 데이터 정리 완료", extra={"stage": "clean_legal_dong", "deleted": result.rowcount})
         return result.rowcount
