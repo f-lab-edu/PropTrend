@@ -7,6 +7,7 @@
 
 import argparse
 import asyncio
+import logging
 from collections.abc import Callable
 
 from dotenv import load_dotenv
@@ -14,6 +15,7 @@ from dotenv import load_dotenv
 from ..db import dispose_engine
 from ..logging_config import configure_logging
 from .context import UnitContextFilter
+from .lock import advisory_lock
 from .pipeline import (
     DEFAULT_CONCURRENCY,
     DEFAULT_MONTHS,
@@ -21,6 +23,8 @@ from .pipeline import (
     MAX_MONTHS,
     refresh_all,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def bounded_int(low: int, high: int) -> Callable[[str], int]:
@@ -55,13 +59,14 @@ def parse_args() -> argparse.Namespace:
 
 async def main() -> None:
     args = parse_args()
-    # LOG_FILE이 있으면 그 경로에 JSON도 함께 쌓는다. 터미널은 항상 사람이 읽는 형식이다.
     configure_logging("pipeline", filters=[UnitContextFilter()])
     try:
-        await refresh_all(months=args.months, concurrency=args.concurrency)
+        async with advisory_lock() as acquired:
+            if not acquired:
+                logger.warning("다른 프로세스가 갱신 중이라 이번 실행을 건너뛴다", extra={"stage": "lock_busy"})
+                return
+            await refresh_all(months=args.months, concurrency=args.concurrency)
     finally:
-        # 원샷 프로세스라 풀을 닫지 않아도 곧 끝나지만, 종료 직전에 커넥션을
-        # 정리해야 서버 쪽에 끊긴 세션이 남지 않는다.
         await dispose_engine()
 
 

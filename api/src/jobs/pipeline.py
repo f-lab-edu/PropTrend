@@ -44,7 +44,8 @@ DEFAULT_MONTHS = 2
 # 갱신 단위 수가 개월 수에 비례하므로 상한을 둔다. --months 인자도 이 값으로 검증된다.
 MAX_MONTHS = 24
 
-# 단위마다 세션을 하나씩 쓰므로 커넥션 풀 크기(기본 pool_size=5)를 넘기면 안 된다.
+# 단위마다 세션을 하나씩 쓰고 advisory lock이 커넥션 1개를 갱신 내내 붙들고 있으므로,
+# 둘을 더한 값이 커넥션 풀 크기(기본 pool_size=5)를 넘기면 안 된다.
 DEFAULT_CONCURRENCY = 4
 
 # 풀을 넉넉히 잡아도 오픈API 쪽이 먼저 막힌다. --concurrency 인자도 이 값으로 검증된다.
