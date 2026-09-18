@@ -163,6 +163,14 @@ PIPELINES: tuple[PipelineSpec, ...] = (
 
 
 @dataclass(frozen=True)
+class SilverResult:
+    """정제 단계(T2) 1건의 처리 결과."""
+
+    deleted: int
+    loaded: int
+
+
+@dataclass(frozen=True)
 class UnitResult:
     """갱신 단위 1건의 처리 결과."""
 
@@ -192,6 +200,12 @@ async def refresh_unit(spec: PipelineSpec, lawd_cd: str, deal_ymd: str) -> UnitR
     logger.debug("bronze 확정", extra={"stage": "commit_bronze", "deleted": raw_deleted, "loaded": raw_loaded})
 
     # T2. 여기서 터져도 bronze는 남아 API 재호출 없이 다시 돌릴 수 있다.
+    silver = await process_unit(spec, lawd_cd, deal_ymd)
+    return UnitResult(spec.name, lawd_cd, deal_ymd, raw_deleted, raw_loaded, silver.deleted, silver.loaded)
+
+
+async def process_unit(spec: PipelineSpec, lawd_cd: str, deal_ymd: str) -> SilverResult:
+    """bronze에 남은 응답만으로 정제 단계를 돌린다. 오픈API를 부르지 않아 단독 재실행이 된다."""
     try:
         async with session_scope() as session:
             # 메모리의 items가 아니라 표에서 다시 읽는다. 트랜잭션이 갈려 있기도 하고,
@@ -202,10 +216,10 @@ async def refresh_unit(spec: PipelineSpec, lawd_cd: str, deal_ymd: str) -> UnitR
             deleted = await spec.cleaner(session).clean(spec.property_type, deal_ymd, lawd_cd)
             loaded = await spec.loader(session).load(payload)
     except Exception as error:
-        raise SilverStageError(f"정제 단계 실패(bronze {raw_loaded}건은 남아 있다): {error}") from error
+        raise SilverStageError(f"정제 단계 실패(bronze는 남아 있다): {error}") from error
 
     logger.debug("정제 확정", extra={"stage": "commit_silver", "deleted": deleted, "loaded": loaded})
-    return UnitResult(spec.name, lawd_cd, deal_ymd, raw_deleted, raw_loaded, deleted, loaded)
+    return SilverResult(deleted, loaded)
 
 
 async def refresh_legal_dong_codes() -> int:
@@ -255,6 +269,34 @@ def iter_units(sgg_list: Sequence[str], month_list: Sequence[str]) -> Iterator[t
                 yield spec, lawd_cd, deal_ymd
 
 
+async def _retry_silver(
+    units: Sequence[tuple[PipelineSpec, str, str]],
+    summary: dict[str, int],
+    semaphore: asyncio.Semaphore,
+) -> None:
+    """1차에서 정제만 실패한 단위를 오픈API 없이 한 번 더 돌린다."""
+    logger.info("정제 재시도 %d단위", len(units), extra={"stage": "silver_retry_start", "units": len(units)})
+
+    async def retry(spec: PipelineSpec, lawd_cd: str, deal_ymd: str) -> None:
+        async with semaphore:
+            with unit_context(spec.api_id, lawd_cd, deal_ymd):
+                started = time.perf_counter()
+                try:
+                    result = await process_unit(spec, lawd_cd, deal_ymd)
+                except SilverStageError:
+                    # 같은 자리에서 두 번 터졌다면 일시 오류가 아니라 전처리 로직 쪽이다.
+                    # 프로세스를 다시 띄워도 결과가 같으므로 종료 코드로는 올리지 않는다.
+                    summary["silver_failed"] += 1
+                    logger.exception("정제 재시도 실패(bronze 보존)", extra=_elapsed_ms(started))
+                else:
+                    summary["silver_recovered"] += 1
+                    summary["succeeded"] += 1
+                    summary["loaded"] += result.loaded
+                    logger.info("정제 재시도 성공", extra=_elapsed_ms(started) | {"loaded": result.loaded})
+
+    await asyncio.gather(*(retry(*unit) for unit in units))
+
+
 async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_CONCURRENCY) -> dict[str, int]:
     """하루치 갱신 전체. 스케줄러에 등록되는 작업은 이 함수 하나다."""
     run_started = time.perf_counter()
@@ -281,11 +323,13 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
 
     semaphore = asyncio.Semaphore(concurrency)
     stop = asyncio.Event()
+    silver_retry: list[tuple[PipelineSpec, str, str]] = []
     summary = {
         "units": len(units),
         "succeeded": 0,
         "failed": 0,
         "silver_failed": 0,
+        "silver_recovered": 0,
         "skipped": 0,
         "daily_limit": 0,
         "loaded": 0,
@@ -311,8 +355,8 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
                     summary["daily_limit"] += 1
                     logger.warning("일일 호출 제한 도달, 남은 단위를 건너뛴다", extra=_elapsed_ms(started))
                 except SilverStageError:
-                    # bronze에는 응답이 남았다. 재수집 없이 다시 돌리면 되므로 따로 센다.
-                    summary["silver_failed"] += 1
+                    # bronze에는 응답이 남았다. 수집 없이 T2만 다시 돌릴 수 있어 2차 패스로 넘긴다.
+                    silver_retry.append((spec, lawd_cd, deal_ymd))
                     logger.exception("정제 실패(bronze 보존)", extra=_elapsed_ms(started))
                 except Exception:
                     # 단위 1건은 트랜잭션째 되돌아가므로 나머지를 멈추지 않고 넘어간다.
@@ -334,11 +378,16 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
 
     await asyncio.gather(*(run(*unit) for unit in units))
 
+    # 수집을 부르지 않으므로 일일 제한으로 접힌 회차에서도 그대로 돌린다.
+    if silver_retry:
+        await _retry_silver(silver_retry, summary, semaphore)
+
     logger.info(
-        "갱신 종료: 성공 %d / 실패 %d / 정제실패 %d / 건너뜀 %d / 적재 %d건",
+        "갱신 종료: 성공 %d / 실패 %d / 정제실패 %d(복구 %d) / 건너뜀 %d / 적재 %d건",
         summary["succeeded"],
         summary["failed"],
         summary["silver_failed"],
+        summary["silver_recovered"],
         summary["skipped"],
         summary["loaded"],
         extra=summary | {"stage": "refresh_end"} | _elapsed_ms(run_started),
