@@ -31,7 +31,7 @@ fi
 
 echo "==> pytest"
 # 테스트 실행기는 api의 dev 의존성 그룹에 고정돼 있어 uv.lock이 버전을 정한다.
-(cd api && uv run --frozen pytest -q) || status=1
+(cd api && uv run --frozen --no-build pytest -q) || status=1
 
 echo "==> jscpd (중복 코드)"
 npx --ignore-scripts --yes "jscpd@${JSCPD_VERSION}" . || status=1
