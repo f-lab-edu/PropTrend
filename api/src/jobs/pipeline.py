@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import time
+from collections import Counter
 from collections.abc import AsyncGenerator, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -335,6 +336,28 @@ def _new_summary(units: int) -> dict[str, int]:
     }
 
 
+class RunTally:
+    """회차 집계. 전체 합계와 API별 분해를 같은 자리에서 올려 둘이 어긋나지 않게 한다."""
+
+    def __init__(self, units: Sequence[tuple[PipelineSpec, str, str]]) -> None:
+        # summary는 종료 코드 판정의 계약이라 모양을 그대로 둔다. 분해는 옆에 따로 쌓는다.
+        self.summary = _new_summary(len(units))
+        # 활동이 없던 spec도 0으로 드러나야 "안 돈 것"과 "다 성공한 것"이 구분된다.
+        self.by_api: dict[str, Counter[str]] = {}
+        for spec, _, _ in units:
+            self.by_api.setdefault(spec.api_id, Counter())["units"] += 1
+
+    def bump(self, spec: PipelineSpec, key: str, amount: int = 1) -> None:
+        """합계와 API별 분해를 함께 올린다. 둘을 따로 올리면 언젠가 반드시 어긋난다."""
+        self.summary[key] += amount
+        self.by_api[spec.api_id][key] += amount
+
+    def by_api_log(self) -> dict[str, dict[str, int]]:
+        """로그에 실을 모양. PIPELINES 순서를 따라야 사람이 읽을 때 유형이 섞이지 않는다."""
+        # Counter를 그대로 두면 TextFormatter가 repr을 찍는다.
+        return {spec.api_id: dict(self.by_api[spec.api_id]) for spec in PIPELINES if spec.api_id in self.by_api}
+
+
 async def _record_failure(
     api_id: str,
     lawd_cd: str,
@@ -354,7 +377,7 @@ async def _record_failure(
 
 async def _collect_pass(
     units: Sequence[tuple[PipelineSpec, str, str]],
-    summary: dict[str, int],
+    tally: RunTally,
     semaphore: asyncio.Semaphore,
 ) -> list[tuple[PipelineSpec, str, str]]:
     """수집부터 도는 패스. 정제만 실패해 재수집이 필요 없는 단위 목록을 돌려준다."""
@@ -365,7 +388,7 @@ async def _collect_pass(
         async with _unit_slot(semaphore, spec, lawd_cd, deal_ymd) as started:
             # 슬롯을 기다리는 사이에 제한에 걸렸을 수 있다. 남은 단위는 슬롯만 스치고 끝난다.
             if stop.is_set():
-                summary["skipped"] += 1
+                tally.bump(spec, "skipped")
                 logger.debug("건너뜀(일일 제한)", extra={"stage": "skip"})
                 return
 
@@ -375,7 +398,7 @@ async def _collect_pass(
                 # 남은 단위도 전부 같은 응답을 받는다. 여기서 접고 내일 회차에 맡긴다.
                 # 아무것도 커밋되지 않았으므로 상태 표에도 남기지 않는다.
                 stop.set()
-                summary["daily_limit"] += 1
+                tally.bump(spec, "daily_limit")
                 logger.warning("일일 호출 제한 도달, 남은 단위를 건너뛴다", extra=_elapsed_ms(started))
             except SilverStageError:
                 # bronze에는 응답이 남았고 COLLECTED 행도 T1이 이미 남겼다. 2차 패스로 넘긴다.
@@ -383,12 +406,12 @@ async def _collect_pass(
                 logger.exception("정제 실패(bronze 보존)", extra=_elapsed_ms(started))
             except Exception as error:
                 # 단위 1건은 트랜잭션째 되돌아가므로 나머지를 멈추지 않고 넘어간다.
-                summary["failed"] += 1
+                tally.bump(spec, "failed")
                 logger.exception("갱신 실패", extra=_elapsed_ms(started))
                 await _record_failure(spec.api_id, lawd_cd, deal_ymd, UnitStatus.FAILED, error)
             else:
-                summary["succeeded"] += 1
-                summary["loaded"] += result.loaded
+                tally.bump(spec, "succeeded")
+                tally.bump(spec, "loaded", result.loaded)
                 logger.info(
                     "단위 완료",
                     extra=_elapsed_ms(started)
@@ -406,7 +429,7 @@ async def _collect_pass(
 
 async def _silver_pass(
     units: Sequence[tuple[PipelineSpec, str, str]],
-    summary: dict[str, int],
+    tally: RunTally,
     semaphore: asyncio.Semaphore,
     *,
     require_bronze: bool = False,
@@ -421,18 +444,18 @@ async def _silver_pass(
             except MissingBronzeError:
                 # 파이프라인이 실패한 게 아니라 좌표가 가리키는 응답이 없는 것이다.
                 # 상태 표는 건드리지 않고, 사람이 알아채도록 집계에만 올린다.
-                summary["no_bronze"] += 1
+                tally.bump(spec, "no_bronze")
                 logger.error("bronze가 없어 정제를 건너뛴다", extra=_elapsed_ms(started))  # noqa: TRY400
             except SilverStageError as error:
                 # 같은 자리에서 또 터졌다면 일시 오류가 아니라 전처리 로직 쪽이다.
                 # 프로세스를 다시 띄워도 결과가 같으므로 정기 회차의 종료 코드로는 올리지 않는다.
-                summary["silver_failed"] += 1
+                tally.bump(spec, "silver_failed")
                 logger.exception("정제 실패(bronze 보존)", extra=_elapsed_ms(started))
                 await _record_failure(spec.api_id, lawd_cd, deal_ymd, UnitStatus.COLLECTED, error)
             else:
-                summary["silver_recovered"] += 1
-                summary["succeeded"] += 1
-                summary["loaded"] += result.loaded
+                tally.bump(spec, "silver_recovered")
+                tally.bump(spec, "succeeded")
+                tally.bump(spec, "loaded", result.loaded)
                 logger.info("정제 성공", extra=_elapsed_ms(started) | {"loaded": result.loaded})
 
     await asyncio.gather(*(retry(*unit) for unit in units))
@@ -449,8 +472,9 @@ async def stuck_units() -> list[UnitRecord]:
     return [record for record in await _leftover_units() if record.attempts >= MAX_ATTEMPTS]
 
 
-async def _finish_run(summary: dict[str, int], run_started: float) -> None:
+async def _finish_run(tally: RunTally, run_started: float) -> None:
     """상태 표를 세어 요약에 붙이고 회차 종료 로그를 남긴다."""
+    summary = tally.summary
     leftovers: list[UnitRecord] = []
     try:
         leftovers = await _leftover_units()
@@ -471,6 +495,9 @@ async def _finish_run(summary: dict[str, int], run_started: float) -> None:
         summary["loaded"],
         extra=summary | {"stage": "refresh_end"} | _elapsed_ms(run_started),
     )
+    # 합계만으로는 "어느 API가 유독 실패하는가"가 안 나온다. 분해는 이벤트를 따로 낸다.
+    logger.info("API별 집계", extra={"stage": "api_summary", "by_api": tally.by_api_log()})
+
     if summary["daily_limit"]:
         # 사유는 사람이 읽는 로그에 남긴다. summary는 dict[str, int]라 문자열을 담을 수 없다.
         logger.warning(
@@ -516,16 +543,16 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
         },
     )
 
-    summary = _new_summary(len(units))
+    tally = RunTally(units)
     semaphore = asyncio.Semaphore(concurrency)
-    silver_retry = await _collect_pass(units, summary, semaphore)
+    silver_retry = await _collect_pass(units, tally, semaphore)
 
     # 수집을 부르지 않으므로 일일 제한으로 접힌 회차에서도 그대로 돌린다.
     if silver_retry:
-        await _silver_pass(silver_retry, summary, semaphore)
+        await _silver_pass(silver_retry, tally, semaphore)
 
-    await _finish_run(summary, run_started)
-    return summary
+    await _finish_run(tally, run_started)
+    return tally.summary
 
 
 async def refresh_units(
@@ -542,18 +569,18 @@ async def refresh_units(
         extra={"stage": "replay_start", "units": len(units), "with_collect": with_collect},
     )
 
-    summary = _new_summary(len(units))
+    tally = RunTally(units)
     semaphore = asyncio.Semaphore(concurrency)
     if with_collect:
-        silver_retry = await _collect_pass(units, summary, semaphore)
+        silver_retry = await _collect_pass(units, tally, semaphore)
         if silver_retry:
-            await _silver_pass(silver_retry, summary, semaphore)
+            await _silver_pass(silver_retry, tally, semaphore)
     else:
         # 사람이 좌표를 찍은 경로다. bronze가 없으면 실버를 지우지 말고 멈춰야 한다.
-        await _silver_pass(units, summary, semaphore, require_bronze=True)
+        await _silver_pass(units, tally, semaphore, require_bronze=True)
 
-    await _finish_run(summary, run_started)
-    return summary
+    await _finish_run(tally, run_started)
+    return tally.summary
 
 
 async def failed_units(*, with_collect: bool) -> list[tuple[PipelineSpec, str, str]]:

@@ -39,6 +39,8 @@ class Harness:
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
         self.api_errors: dict[str, Exception] = {}
+        # api_url -> 그 스펙의 수집이 낼 예외. 시군구가 아니라 스펙 축으로 실패를 가른다.
+        self.spec_errors: dict[str, Exception] = {}
         # lawd_cd -> 정제 단계가 앞으로 실패할 횟수. 1이면 1차만 실패하고 2차 패스에서 산다.
         self.silver_failures: dict[str, int] = {}
         # bronze를 비워 돌려줄 lawd_cd. 정제 단독 실행의 안전장치를 건드리는 데 쓴다.
@@ -62,6 +64,10 @@ class Harness:
 
     def fail_api(self, lawd_cd: str) -> None:
         if error := self.api_errors.get(lawd_cd):
+            raise error
+
+    def fail_spec(self, api_url: str) -> None:
+        if error := self.spec_errors.get(api_url):
             raise error
 
     def fail_silver(self, lawd_cd: str) -> None:
@@ -148,10 +154,12 @@ def _fakes(harness: Harness) -> dict[str, Any]:
 
     class RtmsDataCollector:
         def __init__(self, api_url: str, lawd_cd: str, deal_ymd: str) -> None:
+            self.api_url = api_url
             self.lawd_cd = lawd_cd
 
         async def collect(self) -> list[dict[str, str]]:
             harness.record("collect_api", self.lawd_cd)
+            harness.fail_spec(self.api_url)
             harness.fail_api(self.lawd_cd)
             return [{"aptNm": "청운현대"}] * API_ITEMS
 
@@ -437,6 +445,71 @@ async def test_summary_carries_the_leftover_counts(harness: Harness) -> None:
 
     # 종료 코드가 0인 회차에서도 이 두 값이 "봐야 한다"는 신호가 된다.
     assert (summary["pending_units"], summary["stuck_units"]) == (2, 1)
+
+
+SECOND_SPEC = SaleSpec(
+    "테스트 오피스텔 매매", PropertyType.OFFICETEL, "https://api.test/offi", "officetel_sale", "offiNm"
+)
+
+
+def _two_specs(monkeypatch: pytest.MonkeyPatch, harness: Harness) -> None:
+    """조합을 둘로 늘려 API별 분해가 실제로 갈리는지 볼 수 있게 한다."""
+    monkeypatch.setattr(pipeline, "PIPELINES", (harness.spec, SECOND_SPEC))
+
+
+def _api_summary(caplog: pytest.LogCaptureFixture) -> dict[str, dict[str, int]]:
+    """회차 끝에 한 번 나가는 API별 집계 레코드."""
+    records = [record for record in caplog.records if getattr(record, "stage", None) == "api_summary"]
+    assert len(records) == 1
+    return records[0].by_api
+
+
+async def test_api_summary_splits_counters_per_spec(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _two_specs(monkeypatch, harness)
+
+    with caplog.at_level(logging.INFO, logger="src.jobs.pipeline"):
+        await pipeline.refresh_all(months=1, concurrency=1)
+
+    # 시군구 2 × 1개월 × 2종 = 4단위가 스펙별로 2건씩 갈려야 한다.
+    assert _api_summary(caplog) == {
+        "apart_sale": {"units": 2, "succeeded": 2, "loaded": 2 * BRONZE_ROWS},
+        "officetel_sale": {"units": 2, "succeeded": 2, "loaded": 2 * BRONZE_ROWS},
+    }
+
+
+async def test_api_summary_blames_only_the_failing_spec(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _two_specs(monkeypatch, harness)
+    harness.spec_errors[SECOND_SPEC.api_url] = RuntimeError("일시 오류")
+
+    with caplog.at_level(logging.INFO, logger="src.jobs.pipeline"):
+        summary = await pipeline.refresh_all(months=1, concurrency=1)
+
+    by_api = _api_summary(caplog)
+    # 합계만 보면 "4단위 중 2건 실패"로 끝난다. 어느 API인지는 분해에만 있다.
+    assert summary["failed"] == 2
+    assert by_api["officetel_sale"]["failed"] == 2
+    assert "failed" not in by_api["apart_sale"]
+    assert by_api["apart_sale"]["succeeded"] == 2
+
+
+async def test_api_summary_totals_match_the_summary(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _two_specs(monkeypatch, harness)
+    harness.spec_errors[SECOND_SPEC.api_url] = RuntimeError("일시 오류")
+    harness.silver_failures[SIGUNGU[0]] = 1
+
+    with caplog.at_level(logging.INFO, logger="src.jobs.pipeline"):
+        summary = await pipeline.refresh_all(months=1, concurrency=1)
+
+    by_api = _api_summary(caplog)
+    # bump 하나로 합계와 분해를 함께 올리는 이유다. 따로 올리면 언젠가 여기서 어긋난다.
+    for key in ("units", "succeeded", "failed", "silver_failed", "silver_recovered", "skipped", "loaded"):
+        assert sum(counters.get(key, 0) for counters in by_api.values()) == summary[key], key
 
 
 def test_recent_months_walks_backwards_across_the_year() -> None:

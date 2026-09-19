@@ -114,6 +114,7 @@ cd api && LOG_FILE=logs/pipeline.log uv run python -m src.jobs --months 1
 
 jq 'select(.level == "ERROR") | .error.type' api/logs/pipeline.log   # 실패 유형만
 jq 'select(.stage == "unit_state_pending") | .units' api/logs/pipeline.log  # 안 끝난 단위 좌표
+jq 'select(.stage == "api_summary") | .by_api' api/logs/pipeline.log        # API별 집계
 ```
 
 `unit_state_pending`의 `units` 값은 `--only`에 그대로 넣을 수 있는 모양이다.
