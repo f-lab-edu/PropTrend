@@ -48,3 +48,18 @@ classmethod-decorators = ["sqlalchemy.orm.declared_attr.directive"]
 [tool.ruff.lint.per-file-ignores]
 # 엔진과 세션 팩토리를 최초 호출 시점에 한 번만 만드는 지연 초기화 싱글턴이다.
 "src/db.py" = ["PLW0603"]
+# 테스트는 assert로 단언하고 기대값을 리터럴로 적는다.
+"tests/**" = ["S101", "PLR2004"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+# 테스트는 api/에서 돌지만 임포트는 src.jobs...이므로 프로젝트 루트를 경로에 넣는다.
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
