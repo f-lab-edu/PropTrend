@@ -1,13 +1,17 @@
 [project]
-name = "data-collection-system"
+name = "api"
 version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 dependencies = [
+    "asyncpg>=0.31.0",
     "defusedxml>=0.7.1",
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
     "python-dotenv>=1.2.3",
-    "requests>=2.34.2",
+    "sqlalchemy>=2.0.52",
+    "uvicorn[standard]>=0.52.4",
 ]
 
 [tool.ruff]
@@ -37,6 +41,25 @@ ignore = [
 # SonarCloud의 인지 복잡도 기본 임계값과 맞춘다.
 max-complexity = 15
 
+[tool.ruff.lint.pep8-naming]
+# declared_attr.directive는 self가 아닌 cls를 받는다.
+classmethod-decorators = ["sqlalchemy.orm.declared_attr.directive"]
+
 [tool.ruff.lint.per-file-ignores]
-# api 프로젝트를 sys.path에 올린 뒤에야 src.* 모듈을 임포트할 수 있다.
-"src/load_results.py" = ["E402"]
+# 엔진과 세션 팩토리를 최초 호출 시점에 한 번만 만드는 지연 초기화 싱글턴이다.
+"src/db.py" = ["PLW0603"]
+# 테스트는 assert로 단언하고 기대값을 리터럴로 적는다.
+"tests/**" = ["S101", "PLR2004"]
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "pytest-asyncio>=1.4.0",
+]
+
+[tool.pytest.ini_options]
+# 테스트는 api/에서 돌지만 임포트는 src.jobs...이므로 프로젝트 루트를 경로에 넣는다.
+pythonpath = ["."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"

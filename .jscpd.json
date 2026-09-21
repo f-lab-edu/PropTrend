@@ -1,0 +1,16 @@
+{
+  "pattern": "**/*.py",
+  "minTokens": 50,
+  "threshold": 3,
+  "gitignore": true,
+  "reporters": [
+    "console"
+  ],
+  "ignore": [
+    "**/.venv/**",
+    "**/__pycache__/**",
+    "**/.ruff_cache/**",
+    "**/results/**",
+    "api/src/model/raw.py"
+  ]
+}

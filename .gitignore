@@ -3,3 +3,6 @@ results/
 __pycache__/
 temp/
 .vscode/
+.ruff_cache/
+logs/
+_workspace/

@@ -18,5 +18,34 @@ services:
       timeout: 5s
       retries: 5
 
+  api:
+    build: ./api
+    container_name: prop-trend-api
+    restart: unless-stopped
+    # api/.env는 읽지 않는다. 오픈API 인증키는 파이프라인만 쓰고, 접속 주소는 아래에서 준다.
+    environment:
+      # 컨테이너 안의 localhost는 자기 자신이므로 컨테이너 네트워크 주소를 쓴다.
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/prop_trend
+      TZ: Asia/Seoul
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        # 기동 직후엔 아직 접속을 못 받으므로 healthcheck 통과를 기다린다.
+        condition: service_healthy
+    healthcheck:
+      # slim 이미지에 curl이 없어 파이썬으로 확인한다.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
 volumes:
   postgres-data:
