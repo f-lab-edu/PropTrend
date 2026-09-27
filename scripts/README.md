@@ -11,6 +11,14 @@ uv run --project scripts python scripts/src/collect_legal_dong_code.py
 uv run --project scripts python scripts/src/collect_rtms.py
 ```
 
+`collect_legal_dong_code.py`는 한 번 받아 두 벌로 남긴다. 실거래가 수집은 시군구 목록이
+있어야 시작하므로 이 스크립트를 먼저 돌린다.
+
+| 파일 | 내용 | 읽는 곳 |
+|---|---|---|
+| `legal_dong_code_raw.json` | 응답 전 행(읍면동·리 포함, 13필드 전체) | `load_results.py` → bronze 표 |
+| `legal_dong_code.json` | 시군구만 `{code, name}`으로 줄인 목록 | `collect_rtms.py`의 `LAWD_CD` |
+
 ## 적재 (`load_results.py`)
 
 `scripts/results`에 쌓인 월별 원본 JSON을 **가공 없이 그대로** raw 테이블 8종에 적재하는
