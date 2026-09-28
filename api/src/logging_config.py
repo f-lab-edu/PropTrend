@@ -71,8 +71,8 @@ class JsonFormatter(logging.Formatter):
         payload: dict[str, object] = _extra_fields(record)
 
         payload |= {
-            # 컨테이너 TZ(Asia/Seoul) 기준 오프셋이 붙는다. 수집기가 UTC로 환산할 수 있다.
-            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).astimezone().isoformat(),
+            # 컨테이너 TZ(Asia/Seoul)와 무관하게 UTC로 남겨 프로세스·서버 간 로그를 그대로 맞춰본다.
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "service": self.service,
             "logger": record.name,
@@ -96,6 +96,10 @@ class JsonFormatter(logging.Formatter):
 
 class TextFormatter(logging.Formatter):
     """사람이 읽는 한 줄. 필터가 붙인 컨텍스트를 메시지 끝에 덧붙인다."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:  # noqa: N802
+        """asctime을 JSON의 timestamp와 같은 UTC ISO 8601로 찍는다."""
+        return datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds")
 
     def format(self, record: logging.LogRecord) -> str:
         text = super().format(record)
