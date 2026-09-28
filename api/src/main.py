@@ -2,11 +2,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .db import create_tables, dispose_engine
+from .dependencies import verify_api_key
 from .exception_handlers import (
     http_exception_handler,
     prop_trend_error_handler,
@@ -47,7 +48,11 @@ app = FastAPI(
 
 app.middleware("http")(log_requests)
 
-app.include_router(prop_transaction_router, prefix="/api/prop-transactions")
+app.include_router(
+    prop_transaction_router,
+    prefix="/api/prop-transactions",
+    dependencies=[Depends(verify_api_key)],
+)
 
 
 @app.get("/health")

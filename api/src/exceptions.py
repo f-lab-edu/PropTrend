@@ -12,3 +12,8 @@ class InvalidQueryError(PropTrendError):
 
     status_code = status.HTTP_400_BAD_REQUEST
 
+
+class InvalidApiKeyError(PropTrendError):
+    """X-API-KEY 헤더가 없거나 일치하지 않는다."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
