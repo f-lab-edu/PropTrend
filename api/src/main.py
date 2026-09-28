@@ -5,6 +5,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI
 
 from .db import create_tables, dispose_engine
+from .routers.prop_transaction import router as prop_transaction_router
 
 load_dotenv()
 
@@ -21,6 +22,9 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
 
 
 app = FastAPI(title="prop-trend API", lifespan=lifespan)
+
+
+app.include_router(prop_transaction_router, prefix="/api/prop-transactions")
 
 
 @app.get("/health")
