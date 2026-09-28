@@ -160,7 +160,9 @@ def configure_logging(
     root.addHandler(stream)
 
     # 파일 핸들러를 만들다 실패하면 경고를 남기는데, stdout 핸들러가 먼저 붙어 있어야 그 경고가 보인다.
-    path = log_file or os.environ.get("LOG_FILE")
+    # 경로는 서비스마다 따로 읽는다(API_LOG_FILE, PIPELINE_LOG_FILE). 두 프로세스가 한 파일을
+    # 각자 로테이션하면 서로의 파일을 옮겨 버려 로그가 유실된다.
+    path = log_file or os.environ.get(f"{service.upper()}_LOG_FILE")
     file_handler = _file_handler(path, service) if path else None
     if file_handler is not None:
         root.addHandler(file_handler)
