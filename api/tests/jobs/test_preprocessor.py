@@ -5,11 +5,11 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
-from conftest import FakeSession, bronze_rows, rent_payload, sale_payload
 
 from src.jobs.loader import RentTransactionLoader, SaleTransactionLoader
 from src.jobs.preprocessor import RentPreprocessor, SalePreprocessor
 from src.model import PropertyType
+from tests.jobs.conftest import FakeSession, bronze_rows, rent_payload, sale_payload
 
 
 def sale(**overrides: Any) -> dict[str, Any]:

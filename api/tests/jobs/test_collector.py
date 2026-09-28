@@ -4,7 +4,6 @@ from typing import Any
 
 import httpx
 import pytest
-from conftest import SERVICE_KEY
 
 from src.jobs.collector import (
     DailyLimitReachedError,
@@ -13,6 +12,7 @@ from src.jobs.collector import (
     OpenApiStatusError,
     RtmsDataCollector,
 )
+from tests.jobs.conftest import SERVICE_KEY
 
 
 def rtms_response_body(result_code: str = "000", items: str = "", total_count: int = 0) -> str:
