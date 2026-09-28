@@ -87,7 +87,8 @@ class TransactionMixin:
     sido_code: Mapped[str] = mapped_column(CHAR(2), sort_order=-1)
     sigungu_code: Mapped[str] = mapped_column(CHAR(3), sort_order=-1)
 
-    umd_name: Mapped[str] = mapped_column(String(60), sort_order=-1)
+    # 단독·다가구 전월세 원본에 공백으로만 들어온 행이 7건 있어 NULL을 허용한다.
+    umd_name: Mapped[str | None] = mapped_column(String(60), sort_order=-1)
     # 단독·다가구 전월세는 원본에 지번 필드 자체가 없어 항상 NULL.
     jibun: Mapped[str | None] = mapped_column(String(20), sort_order=-1)
     # aptNm/offiNm/mhouseNm 통합. 단독·다가구는 건물명 개념이 없어 NULL.

@@ -84,12 +84,18 @@ def test_rent_road_address_is_none_when_all_blank() -> None:
 def test_missing_required_field_points_at_bronze_row() -> None:
     processor = SalePreprocessor(PropertyType.APT, "apart_sale", "aptNm")
     # 키 자체가 없는 경우다. KeyError로 새면 _convert가 못 잡아 단위 전체가 터진다.
-    rows = bronze_rows(sale_payload(umdNm=None), start_id=42)
+    rows = bronze_rows(sale_payload(dealYear=None), start_id=42)
 
     with pytest.raises(ValueError, match=r"apart_sale 가공 실패\(rtms_raw_items.id=42\)") as error:
         processor.preprocess(rows)
 
-    assert "umdNm" in str(error.value)
+    assert "dealYear" in str(error.value)
+
+
+@pytest.mark.parametrize("empty", [None, " "])
+def test_blank_umd_name_becomes_none(empty: str | None) -> None:
+    # 단독·다가구 전월세 원본에 읍면동명이 빈 행이 있다. 단위를 실패시키지 않고 NULL로 둔다.
+    assert rent(umdNm=empty)["umd_name"] is None
 
 
 def test_unparsable_amount_points_at_bronze_row() -> None:
