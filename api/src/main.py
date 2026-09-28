@@ -3,8 +3,17 @@ from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .db import create_tables, dispose_engine
+from .exception_handlers import (
+    http_exception_handler,
+    prop_trend_error_handler,
+    request_validation_error_handler,
+    unhandled_exception_handler,
+)
+from .exceptions import PropTrendError
 from .logging_config import configure_logging
 from .middlewares import RequestIdFilter, log_requests
 from .routers.prop_transaction import router as prop_transaction_router
@@ -25,7 +34,16 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
         await dispose_engine()
 
 
-app = FastAPI(title="prop-trend API", lifespan=lifespan)
+app = FastAPI(
+    title="prop-trend API",
+    lifespan=lifespan,
+    exception_handlers={
+        PropTrendError: prop_trend_error_handler,
+        StarletteHTTPException: http_exception_handler,
+        RequestValidationError: request_validation_error_handler,
+        Exception: unhandled_exception_handler,
+    },
+)
 
 app.middleware("http")(log_requests)
 

@@ -4,6 +4,7 @@ from datetime import date
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ..exceptions import InvalidQueryError
 from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction
 from ..model.raw import LegalDongCodeRawItem
 from ..schemas.prop_transaction import RentPropTransactionResponse, SalePropTransactionResponse
@@ -62,9 +63,9 @@ async def get_sale_transactions(
     """조건에 맞는 매매 실거래 목록을 조회한다."""
     # 지역은 시도 → 시군구 → 계약일 순으로 좁힌다. 상위 조건 없이 하위 조건만 오면 거부한다.
     if sigungu_code is not None and sido_code is None:
-        raise ValueError("sigungu_code는 sido_code와 함께 지정해야 한다")
+        raise InvalidQueryError("sigungu_code는 sido_code와 함께 지정해야 한다")
     if deal_date is not None and (sido_code is None or sigungu_code is None):
-        raise ValueError("deal_date는 sido_code, sigungu_code와 함께 지정해야 한다")
+        raise InvalidQueryError("deal_date는 sido_code, sigungu_code와 함께 지정해야 한다")
 
     conditions = [SaleTransaction.property_type == property_type]
     if sido_code is not None:
@@ -90,9 +91,9 @@ async def get_rent_transactions(
     """조건에 맞는 전월세 실거래 목록을 조회한다."""
     # 지역은 시도 → 시군구 → 계약일 순으로 좁힌다. 상위 조건 없이 하위 조건만 오면 거부한다.
     if sigungu_code is not None and sido_code is None:
-        raise ValueError("sigungu_code는 sido_code와 함께 지정해야 한다")
+        raise InvalidQueryError("sigungu_code는 sido_code와 함께 지정해야 한다")
     if deal_date is not None and (sido_code is None or sigungu_code is None):
-        raise ValueError("deal_date는 sido_code, sigungu_code와 함께 지정해야 한다")
+        raise InvalidQueryError("deal_date는 sido_code, sigungu_code와 함께 지정해야 한다")
 
     conditions = [RentTransaction.property_type == property_type]
     if sido_code is not None:
