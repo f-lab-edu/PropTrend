@@ -55,15 +55,9 @@ PropertyTypeColumn = Enum(
 
 
 class TransactionMixin:
-    """매매/전월세 테이블이 공유하는 컬럼(draft.md 2절).
+    """매매/전월세 테이블이 공유하는 컬럼."""
 
-    bronze 계층과 달리 이 계층은 가공을 마친 값만 받으므로, 모든 유형에 반드시
-    존재하는 컬럼은 NOT NULL로 잠근다. 특정 유형에만 있는 필드는 nullable이며
-    주석에 어느 유형에서 채워지는지를 적어둔다.
-
-    갱신을 "적재 대상 날짜 범위 삭제 → 재적재" 순으로 수행하므로 중복 방지용
-    자연키(unique)는 두지 않는다. 인덱스도 실제 쿼리에서 필요해진 것만 둔다.
-    """
+    __tablename__: str
 
     @declared_attr.directive
     def __table_args__(cls) -> tuple[Any, ...]:
