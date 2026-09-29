@@ -51,6 +51,7 @@ app.middleware("http")(log_requests)
 app.include_router(
     prop_transaction_router,
     prefix="/api/prop-transactions",
+    tags=["prop_transaction"],
     dependencies=[Depends(verify_api_key)],
 )
 
