@@ -61,6 +61,7 @@ RENT_ROW = {
 }
 
 INVALID_PARAMS = [
+    pytest.param({}, "property_type", "missing", id="missing_property_type"),
     pytest.param({"property_type": "VILLA"}, "property_type", "enum", id="property_type"),
     pytest.param({"property_type": "APT", "sido_code": "1"}, "sido_code", "string_pattern_mismatch", id="sido_code"),
     pytest.param(

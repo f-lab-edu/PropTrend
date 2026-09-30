@@ -9,7 +9,7 @@ from . import PropTrendCoreModel
 class PropTransactionQuery(PropTrendCoreModel):
     """실거래 목록 조회 조건."""
 
-    property_type: PropertyType | None = None
+    property_type: PropertyType
     sido_code: str | None = Field(default=None, pattern=r"^\d{2}$")
     sigungu_code: str | None = Field(default=None, pattern=r"^\d{3}$")
     deal_date: date | None = None
