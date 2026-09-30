@@ -76,6 +76,9 @@ INVALID_PARAMS = [
         "date_from_datetime_parsing",
         id="deal_date",
     ),
+    pytest.param({"property_type": "APT", "limit": 0}, "limit", "greater_than_equal", id="limit_too_small"),
+    pytest.param({"property_type": "APT", "limit": 1001}, "limit", "less_than_equal", id="limit_too_large"),
+    pytest.param({"property_type": "APT", "offset": -1}, "offset", "greater_than_equal", id="offset_negative"),
 ]
 
 DEAL_DATE_WITHOUT_REGION_PARAMS = [
@@ -141,6 +144,18 @@ class TestGetSalePropTransactions:
         assert {item["id"] for item in response.json()} == {
             seed[name].id for name in ("target", "other_date", "other_sigungu", "unknown_region")
         }
+
+    async def test_paginates_by_limit_and_offset(
+        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
+    ) -> None:
+        """limit·offset만큼 잘라 id 오름차순으로 준다."""
+        ids = sorted(seed[name].id for name in ("target", "other_date", "other_sigungu", "unknown_region"))
+        params = {"property_type": "APT", "sido_code": "11", "limit": 2, "offset": 1}
+
+        response = await client.get(SALES_URL, params=params)
+
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()] == ids[1:3]
 
     async def test_omits_region_name_when_legal_dong_code_missing(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
@@ -281,6 +296,18 @@ class TestGetRentPropTransactions:
         assert {item["id"] for item in response.json()} == {
             seed[name].id for name in ("target", "monthly", "other_date", "other_sigungu", "unknown_region")
         }
+
+    async def test_paginates_by_limit_and_offset(
+        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
+    ) -> None:
+        """limit·offset만큼 잘라 id 오름차순으로 준다."""
+        ids = sorted(seed[name].id for name in ("target", "monthly", "other_date", "other_sigungu", "unknown_region"))
+        params = {"property_type": "APT", "sido_code": "11", "limit": 2, "offset": 1}
+
+        response = await client.get(RENTS_URL, params=params)
+
+        assert response.status_code == 200
+        assert [item["id"] for item in response.json()] == ids[1:3]
 
     async def test_omits_region_name_when_legal_dong_code_missing(
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]

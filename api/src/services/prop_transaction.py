@@ -1,13 +1,12 @@
 import time
-from datetime import date
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..exceptions import InvalidQueryError
-from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction
+from ..model.prop_transaction import RentTransaction, SaleTransaction
 from ..model.raw import LegalDongCodeRawItem
-from ..schemas.prop_transaction import RentPropTransactionResponse, SalePropTransactionResponse
+from ..schemas.prop_transaction import PropTransactionQuery, RentPropTransactionResponse, SalePropTransactionResponse
 
 # 법정동코드는 파이프라인이 하루 한 번 통째로 갈아 끼운다. 갱신 후 늦어도 이 시간 안에는 새 이름을 쓴다.
 REGION_NAME_TTL_SECONDS = 60 * 60
@@ -53,56 +52,52 @@ def _build_rent_response_with_region_name(
 
 
 async def get_sale_transactions(
-    session: AsyncSession,
-    *,
-    property_type: PropertyType,
-    sido_code: str | None = None,
-    sigungu_code: str | None = None,
-    deal_date: date | None = None,
+    session: AsyncSession, query: PropTransactionQuery
 ) -> list[SalePropTransactionResponse]:
     """조건에 맞는 매매 실거래 목록을 조회한다."""
     # 지역은 시도 → 시군구 → 계약일 순으로 좁힌다. 상위 조건 없이 하위 조건만 오면 거부한다.
-    if sigungu_code is not None and sido_code is None:
+    if query.sigungu_code is not None and query.sido_code is None:
         raise InvalidQueryError("sigungu_code는 sido_code와 함께 지정해야 한다")
-    if deal_date is not None and (sido_code is None or sigungu_code is None):
+    if query.deal_date is not None and (query.sido_code is None or query.sigungu_code is None):
         raise InvalidQueryError("deal_date는 sido_code, sigungu_code와 함께 지정해야 한다")
 
-    conditions = [SaleTransaction.property_type == property_type]
-    if sido_code is not None:
-        conditions.append(SaleTransaction.sido_code == sido_code)
-    if sigungu_code is not None:
-        conditions.append(SaleTransaction.sigungu_code == sigungu_code)
-    if deal_date is not None:
-        conditions.append(SaleTransaction.deal_date == deal_date)
+    conditions = [SaleTransaction.property_type == query.property_type]
+    if query.sido_code is not None:
+        conditions.append(SaleTransaction.sido_code == query.sido_code)
+    if query.sigungu_code is not None:
+        conditions.append(SaleTransaction.sigungu_code == query.sigungu_code)
+    if query.deal_date is not None:
+        conditions.append(SaleTransaction.deal_date == query.deal_date)
 
-    result = await session.execute(select(SaleTransaction).where(*conditions))
+    # 페이지 경계가 요청마다 달라지지 않도록 id 순으로 고정한다.
+    result = await session.execute(
+        select(SaleTransaction).where(*conditions).order_by(SaleTransaction.id).limit(query.limit).offset(query.offset)
+    )
     names = await _get_region_names(session)
     return [_build_sale_response_with_region_name(transaction, names) for transaction in result.scalars()]
 
 
 async def get_rent_transactions(
-    session: AsyncSession,
-    *,
-    property_type: PropertyType,
-    sido_code: str | None = None,
-    sigungu_code: str | None = None,
-    deal_date: date | None = None,
+    session: AsyncSession, query: PropTransactionQuery
 ) -> list[RentPropTransactionResponse]:
     """조건에 맞는 전월세 실거래 목록을 조회한다."""
     # 지역은 시도 → 시군구 → 계약일 순으로 좁힌다. 상위 조건 없이 하위 조건만 오면 거부한다.
-    if sigungu_code is not None and sido_code is None:
+    if query.sigungu_code is not None and query.sido_code is None:
         raise InvalidQueryError("sigungu_code는 sido_code와 함께 지정해야 한다")
-    if deal_date is not None and (sido_code is None or sigungu_code is None):
+    if query.deal_date is not None and (query.sido_code is None or query.sigungu_code is None):
         raise InvalidQueryError("deal_date는 sido_code, sigungu_code와 함께 지정해야 한다")
 
-    conditions = [RentTransaction.property_type == property_type]
-    if sido_code is not None:
-        conditions.append(RentTransaction.sido_code == sido_code)
-    if sigungu_code is not None:
-        conditions.append(RentTransaction.sigungu_code == sigungu_code)
-    if deal_date is not None:
-        conditions.append(RentTransaction.deal_date == deal_date)
+    conditions = [RentTransaction.property_type == query.property_type]
+    if query.sido_code is not None:
+        conditions.append(RentTransaction.sido_code == query.sido_code)
+    if query.sigungu_code is not None:
+        conditions.append(RentTransaction.sigungu_code == query.sigungu_code)
+    if query.deal_date is not None:
+        conditions.append(RentTransaction.deal_date == query.deal_date)
 
-    result = await session.execute(select(RentTransaction).where(*conditions))
+    # 페이지 경계가 요청마다 달라지지 않도록 id 순으로 고정한다.
+    result = await session.execute(
+        select(RentTransaction).where(*conditions).order_by(RentTransaction.id).limit(query.limit).offset(query.offset)
+    )
     names = await _get_region_names(session)
     return [_build_rent_response_with_region_name(transaction, names) for transaction in result.scalars()]

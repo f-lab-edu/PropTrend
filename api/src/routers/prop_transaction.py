@@ -20,7 +20,8 @@ router = APIRouter()
         "상위 조건 없이 하위 조건만 지정하면 400을 반환합니다.\n"
         "- `address`는 법정동코드의 지역명, 읍면동, 지번 중 값이 있는 것만 이어 붙입니다.\n"
         "- `deal_amount`의 단위는 원입니다.\n"
-        "- 부동산 유형에 해당하지 않는 필드는 `null`로 응답합니다."
+        "- 부동산 유형에 해당하지 않는 필드는 `null`로 응답합니다.\n"
+        "- 결과는 `id` 오름차순이며 `limit`(기본 100, 최대 1000)과 `offset`으로 페이지를 나눕니다."
     ),
 )
 async def get_sale_prop_transactions(
@@ -29,7 +30,7 @@ async def get_sale_prop_transactions(
 ) -> list[SalePropTransactionResponse]:
     """매매 실거래 목록을 조회한다."""
     async with session.begin():
-        return await get_sale_transactions(session, **query.model_dump())
+        return await get_sale_transactions(session, query)
 
 
 @router.get(
@@ -42,7 +43,8 @@ async def get_sale_prop_transactions(
         "상위 조건 없이 하위 조건만 지정하면 400을 반환합니다.\n"
         "- `address`는 법정동코드의 지역명, 읍면동, 지번 중 값이 있는 것만 이어 붙입니다.\n"
         "- `deposit`, `monthly_rent`의 단위는 원입니다. `monthly_rent`가 0이면 전세 거래입니다.\n"
-        "- 부동산 유형에 해당하지 않는 필드는 `null`로 응답합니다."
+        "- 부동산 유형에 해당하지 않는 필드는 `null`로 응답합니다.\n"
+        "- 결과는 `id` 오름차순이며 `limit`(기본 100, 최대 1000)과 `offset`으로 페이지를 나눕니다."
     ),
 )
 async def get_rent_prop_transactions(
@@ -51,4 +53,4 @@ async def get_rent_prop_transactions(
 ) -> list[RentPropTransactionResponse]:
     """전월세 실거래 목록을 조회한다."""
     async with session.begin():
-        return await get_rent_transactions(session, **query.model_dump())
+        return await get_rent_transactions(session, query)

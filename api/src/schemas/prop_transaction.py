@@ -13,6 +13,9 @@ class PropTransactionQuery(PropTrendCoreModel):
     sido_code: str | None = Field(default=None, pattern=r"^\d{2}$")
     sigungu_code: str | None = Field(default=None, pattern=r"^\d{3}$")
     deal_date: date | None = None
+    # 한 요청이 테이블 전체를 읽지 않도록 한 페이지의 최대 행 수를 서버에서 제한한다.
+    limit: int = Field(default=100, ge=1, le=1000)
+    offset: int = Field(default=0, ge=0)
 
 
 class AddressResponse(PropTrendCoreModel):
