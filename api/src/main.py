@@ -6,6 +6,7 @@ from fastapi import Depends, FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from .config import get_settings
 from .db import create_tables, dispose_engine
 from .dependencies import verify_api_key
 from .exception_handlers import (
@@ -24,6 +25,7 @@ load_dotenv()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncGenerator[None]:
+    get_settings()
     # 요청 로그에 request_id가 붙도록 필터를 핸들러에 단다.
     configure_logging("api", filters=[RequestIdFilter()])
     # 스키마 생성은 API 서버가 맡는다. 갱신 파이프라인은 별도 프로세스로 돌면서

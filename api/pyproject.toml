@@ -9,6 +9,7 @@ dependencies = [
     "defusedxml>=0.7.1",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
+    "pydantic-settings>=2.15.0",
     "python-dotenv>=1.2.3",
     "sqlalchemy[asyncio]>=2.0.52",
     "uvicorn[standard]>=0.52.4",

@@ -1,14 +1,14 @@
 """라우터가 공유하는 의존성"""
 
-import os
 import secrets
 from collections.abc import AsyncIterator
 from typing import Annotated
 
-from fastapi import Security
+from fastapi import Depends, Security
 from fastapi.security import APIKeyHeader
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from .config import Settings, get_settings
 from .db import get_session_factory
 from .exceptions import InvalidApiKeyError
 
@@ -16,10 +16,12 @@ from .exceptions import InvalidApiKeyError
 api_key_header = APIKeyHeader(name="X-API-KEY", auto_error=False)
 
 
-async def verify_api_key(api_key: Annotated[str | None, Security(api_key_header)]) -> None:
-    """X-API-KEY 헤더가 .env의 API_KEY와 같은지 확인한다."""
-    # 설정이 빠지면 KeyError로 500을 내 모든 요청을 막는다.
-    expected = os.environ["API_KEY"]
+async def verify_api_key(
+    api_key: Annotated[str | None, Security(api_key_header)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> None:
+    """X-API-KEY 헤더가 설정의 API_KEY와 같은지 확인한다."""
+    expected = settings.api_key.get_secret_value()
     if api_key is None or not secrets.compare_digest(api_key.encode(), expected.encode()):
         raise InvalidApiKeyError("API 키가 올바르지 않습니다")
 

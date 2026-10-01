@@ -8,9 +8,11 @@ from typing import Any
 import httpx
 import pytest
 import pytest_asyncio
+from pydantic import SecretStr
 from sqlalchemy import delete, insert, inspect, make_url, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
+from src.config import Settings, get_settings
 from src.dependencies import get_session
 from src.main import app
 from src.model import Base
@@ -81,10 +83,10 @@ async def client(
         async with session_factory() as session:
             yield session
 
-    monkeypatch.setenv("API_KEY", API_KEY)
     # 지역명 캐시가 앞 테스트의 시드를 들고 있지 않도록 매번 비운다.
     monkeypatch.setattr(prop_transaction_service, "_region_names_loaded_at", None)
     app.dependency_overrides[get_session] = get_test_session
+    app.dependency_overrides[get_settings] = lambda: Settings(api_key=SecretStr(API_KEY))
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"X-API-KEY": API_KEY}) as c:
         yield c

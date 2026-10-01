@@ -6,7 +6,9 @@ from typing import Any
 
 import httpx
 import pytest
+from pydantic import SecretStr
 
+from src.config import Settings, get_settings
 from src.dependencies import get_session
 from src.main import app
 
@@ -37,9 +39,9 @@ class _EmptySession:
 
 class TestVerifyApiKey:
     @pytest.fixture(autouse=True)
-    def setup(self, monkeypatch: pytest.MonkeyPatch) -> Any:
-        monkeypatch.setenv("API_KEY", API_KEY)
+    def setup(self) -> Any:
         app.dependency_overrides[get_session] = _EmptySession
+        app.dependency_overrides[get_settings] = lambda: Settings(api_key=SecretStr(API_KEY))
         yield
         app.dependency_overrides.clear()
 
