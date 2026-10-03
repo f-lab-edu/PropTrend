@@ -4,7 +4,6 @@ from datetime import date
 from typing import Any
 
 import pytest
-from conftest import FakeSession
 from sqlalchemy import Delete
 from sqlalchemy.sql.elements import BooleanClauseList
 
@@ -16,6 +15,7 @@ from src.jobs.cleaner import (
 )
 from src.jobs.loader import RTMSRawItemLoader
 from src.model import PropertyType
+from tests.jobs.conftest import FakeSession
 
 
 def where_conditions(statement: Delete) -> list[tuple[str, str, Any]]:

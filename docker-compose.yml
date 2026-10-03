@@ -26,6 +26,8 @@ services:
     environment:
       # 컨테이너 안의 localhost는 자기 자신이므로 컨테이너 네트워크 주소를 쓴다.
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/prop_trend
+      # 호스트 환경변수나 루트 .env에서 받는다. 앱도 기동 시 검증하지만 compose 단계에서 먼저 막는다.
+      API_KEY: ${API_KEY:?API_KEY must be set}
       TZ: Asia/Seoul
     ports:
       - "8000:8000"

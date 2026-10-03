@@ -1,16 +1,5 @@
 """scripts/docs/data-api의 9개 오픈API 응답 item을 스키마 종속 없이 보관하는 bronze 모델.
 
-docs:
-- scripts/docs/data-api/apart-sale.md (getRTMSDataSvcAptTrade)
-- scripts/docs/data-api/apart-rent.md (getRTMSDataSvcAptRent)
-- scripts/docs/data-api/officetel-sale.md (getRTMSDataSvcOffiTrade)
-- scripts/docs/data-api/officetel-rent.md (getRTMSDataSvcOffiRent)
-- scripts/docs/data-api/multiflex-sale.md (getRTMSDataSvcRHTrade)
-- scripts/docs/data-api/multiflex-rent.md (getRTMSDataSvcRHRent)
-- scripts/docs/data-api/single-multi-family-sale.md (getRTMSDataSvcSHTrade)
-- scripts/docs/data-api/single-multi-family-rent.md (getRTMSDataSvcSHRent)
-- scripts/docs/data-api/legal-dong-code.md (getStanReginCdList)
-
 값 검증과 타입 정규화는 이 표들을 읽어가는 silver(prop_transaction) 계층의 책임이다.
 갱신 방식이 달라 표를 나눈다. 실거래가 8종은 (계약년월, 시군구) 구간을 갈아끼우고,
 법정동코드는 표를 통째로 비우고 다시 채운다.

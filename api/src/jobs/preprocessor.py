@@ -61,7 +61,7 @@ class RawTablePreprocessor(ABC):
             "house_type": _text(row.get("houseType")),
             "sido_code": sido_code,
             "sigungu_code": sigungu_code,
-            "umd_name": _required(row, "umdNm"),
+            "umd_name": _text(row.get("umdNm")),
             "jibun": _text(row.get("jibun")),
             "building_name": building_name,
             "deal_date": date(
