@@ -7,12 +7,6 @@ class PropTrendError(Exception):
     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
 
 
-class InvalidQueryError(PropTrendError):
-    """조회 조건의 조합이 잘못됐다."""
-
-    status_code = status.HTTP_400_BAD_REQUEST
-
-
 class InvalidApiKeyError(PropTrendError):
     """X-API-KEY 헤더가 없거나 일치하지 않는다."""
 

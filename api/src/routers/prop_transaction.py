@@ -16,8 +16,7 @@ router = APIRouter()
     summary="매매 실거래 목록 조회",
     description=(
         "조회 조건에 맞는 매매 실거래 목록을 반환합니다.\n\n"
-        "- 지역 조건은 `sido_code` → `sigungu_code` → `deal_date` 순으로 좁힙니다. "
-        "상위 조건 없이 하위 조건만 지정하면 400을 반환합니다.\n"
+        "- `property_type`, `sido_code`, `sigungu_code`, `deal_date`는 모두 필수입니다.\n"
         "- `address`는 법정동코드의 지역명, 읍면동, 지번 중 값이 있는 것만 이어 붙입니다.\n"
         "- `deal_amount`의 단위는 원입니다.\n"
         "- 부동산 유형에 해당하지 않는 필드는 `null`로 응답합니다.\n"
@@ -39,8 +38,7 @@ async def get_sale_prop_transactions(
     summary="전월세 실거래 목록 조회",
     description=(
         "조회 조건에 맞는 전월세 실거래 목록을 반환합니다.\n\n"
-        "- 지역 조건은 `sido_code` → `sigungu_code` → `deal_date` 순으로 좁힙니다. "
-        "상위 조건 없이 하위 조건만 지정하면 400을 반환합니다.\n"
+        "- `property_type`, `sido_code`, `sigungu_code`, `deal_date`는 모두 필수입니다.\n"
         "- `address`는 법정동코드의 지역명, 읍면동, 지번 중 값이 있는 것만 이어 붙입니다.\n"
         "- `deposit`, `monthly_rent`의 단위는 원입니다. `monthly_rent`가 0이면 전세 거래입니다.\n"
         "- 부동산 유형에 해당하지 않는 필드는 `null`로 응답합니다.\n"

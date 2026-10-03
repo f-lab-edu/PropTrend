@@ -3,7 +3,6 @@ import time
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..exceptions import InvalidQueryError
 from ..model.prop_transaction import RentTransaction, SaleTransaction
 from ..model.raw import LegalDongCodeRawItem
 from ..schemas.prop_transaction import PropTransactionQuery, RentPropTransactionResponse, SalePropTransactionResponse
@@ -55,19 +54,12 @@ async def get_sale_transactions(
     session: AsyncSession, query: PropTransactionQuery
 ) -> list[SalePropTransactionResponse]:
     """조건에 맞는 매매 실거래 목록을 조회한다."""
-    # 지역은 시도 → 시군구 → 계약일 순으로 좁힌다. 상위 조건 없이 하위 조건만 오면 거부한다.
-    if query.sigungu_code is not None and query.sido_code is None:
-        raise InvalidQueryError("sigungu_code는 sido_code와 함께 지정해야 한다")
-    if query.deal_date is not None and (query.sido_code is None or query.sigungu_code is None):
-        raise InvalidQueryError("deal_date는 sido_code, sigungu_code와 함께 지정해야 한다")
-
-    conditions = [SaleTransaction.property_type == query.property_type]
-    if query.sido_code is not None:
-        conditions.append(SaleTransaction.sido_code == query.sido_code)
-    if query.sigungu_code is not None:
-        conditions.append(SaleTransaction.sigungu_code == query.sigungu_code)
-    if query.deal_date is not None:
-        conditions.append(SaleTransaction.deal_date == query.deal_date)
+    conditions = [
+        SaleTransaction.property_type == query.property_type,
+        SaleTransaction.sido_code == query.sido_code,
+        SaleTransaction.sigungu_code == query.sigungu_code,
+        SaleTransaction.deal_date == query.deal_date,
+    ]
 
     # 페이지 경계가 요청마다 달라지지 않도록 id 순으로 고정한다.
     result = await session.execute(
@@ -81,19 +73,12 @@ async def get_rent_transactions(
     session: AsyncSession, query: PropTransactionQuery
 ) -> list[RentPropTransactionResponse]:
     """조건에 맞는 전월세 실거래 목록을 조회한다."""
-    # 지역은 시도 → 시군구 → 계약일 순으로 좁힌다. 상위 조건 없이 하위 조건만 오면 거부한다.
-    if query.sigungu_code is not None and query.sido_code is None:
-        raise InvalidQueryError("sigungu_code는 sido_code와 함께 지정해야 한다")
-    if query.deal_date is not None and (query.sido_code is None or query.sigungu_code is None):
-        raise InvalidQueryError("deal_date는 sido_code, sigungu_code와 함께 지정해야 한다")
-
-    conditions = [RentTransaction.property_type == query.property_type]
-    if query.sido_code is not None:
-        conditions.append(RentTransaction.sido_code == query.sido_code)
-    if query.sigungu_code is not None:
-        conditions.append(RentTransaction.sigungu_code == query.sigungu_code)
-    if query.deal_date is not None:
-        conditions.append(RentTransaction.deal_date == query.deal_date)
+    conditions = [
+        RentTransaction.property_type == query.property_type,
+        RentTransaction.sido_code == query.sido_code,
+        RentTransaction.sigungu_code == query.sigungu_code,
+        RentTransaction.deal_date == query.deal_date,
+    ]
 
     # 페이지 경계가 요청마다 달라지지 않도록 id 순으로 고정한다.
     result = await session.execute(

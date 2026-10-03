@@ -14,6 +14,7 @@ from src.main import app
 
 API_KEY = "test-api-key"
 URL = "/api/prop-transactions/sales"
+PARAMS = {"property_type": "APT", "sido_code": "11", "sigungu_code": "680", "deal_date": "2026-02-27"}
 
 
 class _EmptyResult:
@@ -52,13 +53,13 @@ class TestVerifyApiKey:
             yield client
 
     async def test_passes_with_valid_key(self, client: httpx.AsyncClient) -> None:
-        response = await client.get(URL, params={"property_type": "APT"}, headers={"X-API-KEY": API_KEY})
+        response = await client.get(URL, params=PARAMS, headers={"X-API-KEY": API_KEY})
 
         assert response.status_code == 200
         assert response.json() == []
 
     async def test_rejects_missing_key(self, client: httpx.AsyncClient) -> None:
-        response = await client.get(URL, params={"property_type": "APT"})
+        response = await client.get(URL, params=PARAMS)
 
         assert response.status_code == 401
         assert response.json() == {
@@ -68,7 +69,7 @@ class TestVerifyApiKey:
         }
 
     async def test_rejects_wrong_key(self, client: httpx.AsyncClient) -> None:
-        response = await client.get(URL, params={"property_type": "APT"}, headers={"X-API-KEY": "wrong"})
+        response = await client.get(URL, params=PARAMS, headers={"X-API-KEY": "wrong"})
 
         assert response.status_code == 401
         assert response.json() == {

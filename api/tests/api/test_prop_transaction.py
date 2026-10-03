@@ -60,30 +60,30 @@ RENT_ROW = {
     "build_year": 2005,
 }
 
-INVALID_PARAMS = [
-    pytest.param({}, "property_type", "missing", id="missing_property_type"),
-    pytest.param({"property_type": "VILLA"}, "property_type", "enum", id="property_type"),
-    pytest.param({"property_type": "APT", "sido_code": "1"}, "sido_code", "string_pattern_mismatch", id="sido_code"),
-    pytest.param(
-        {"property_type": "APT", "sido_code": "11", "sigungu_code": "68"},
-        "sigungu_code",
-        "string_pattern_mismatch",
-        id="sigungu_code",
-    ),
-    pytest.param(
-        {"property_type": "APT", "sido_code": "11", "sigungu_code": "680", "deal_date": "2026-13-01"},
-        "deal_date",
-        "date_from_datetime_parsing",
-        id="deal_date",
-    ),
-    pytest.param({"property_type": "APT", "limit": 0}, "limit", "greater_than_equal", id="limit_too_small"),
-    pytest.param({"property_type": "APT", "limit": 1001}, "limit", "less_than_equal", id="limit_too_large"),
-    pytest.param({"property_type": "APT", "offset": -1}, "offset", "greater_than_equal", id="offset_negative"),
-]
+# 필수 조회 조건. 시드의 target 행과 맞는다.
+REQUIRED_PARAMS = {"property_type": "APT", "sido_code": "11", "sigungu_code": "680", "deal_date": "2026-02-27"}
 
-DEAL_DATE_WITHOUT_REGION_PARAMS = [
-    pytest.param({"property_type": "APT", "deal_date": "2026-02-27"}, id="no_region"),
-    pytest.param({"property_type": "APT", "sido_code": "11", "deal_date": "2026-02-27"}, id="sido_only"),
+INVALID_PARAMS = [
+    *(
+        pytest.param(
+            {key: value for key, value in REQUIRED_PARAMS.items() if key != field},
+            field,
+            "missing",
+            id=f"missing_{field}",
+        )
+        for field in REQUIRED_PARAMS
+    ),
+    pytest.param(REQUIRED_PARAMS | {"property_type": "VILLA"}, "property_type", "enum", id="property_type"),
+    pytest.param(REQUIRED_PARAMS | {"sido_code": "1"}, "sido_code", "string_pattern_mismatch", id="sido_code"),
+    pytest.param(
+        REQUIRED_PARAMS | {"sigungu_code": "68"}, "sigungu_code", "string_pattern_mismatch", id="sigungu_code"
+    ),
+    pytest.param(
+        REQUIRED_PARAMS | {"deal_date": "2026-13-01"}, "deal_date", "date_from_datetime_parsing", id="deal_date"
+    ),
+    pytest.param(REQUIRED_PARAMS | {"limit": 0}, "limit", "greater_than_equal", id="limit_too_small"),
+    pytest.param(REQUIRED_PARAMS | {"limit": 1001}, "limit", "less_than_equal", id="limit_too_large"),
+    pytest.param(REQUIRED_PARAMS | {"offset": -1}, "offset", "greater_than_equal", id="offset_negative"),
 ]
 
 
@@ -93,6 +93,7 @@ class TestGetSalePropTransactions:
     async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, SaleTransaction]]:
         rows = {
             "target": SALE_ROW,
+            "same_day": SALE_ROW | {"jibun": "123-5", "deal_amount": 1_200_000_000, "floor": 3},
             "other_date": SALE_ROW | {"deal_date": date(2026, 2, 28)},
             "other_sigungu": SALE_ROW | {"sigungu_code": "650", "umd_name": "서초동", "jibun": "1-1"},
             "other_sido": SALE_ROW | {"sido_code": "26", "sigungu_code": "350", "umd_name": "우동", "jibun": "1-1"},
@@ -109,12 +110,10 @@ class TestGetSalePropTransactions:
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
         """유형·시도·시군구·계약일이 모두 맞는 매매만 지역명을 붙인 주소와 함께 준다."""
-        params = {"property_type": "APT", "sido_code": "11", "sigungu_code": "680", "deal_date": "2026-02-27"}
-
-        response = await client.get(SALES_URL, params=params)
+        response = await client.get(SALES_URL, params=REQUIRED_PARAMS)
 
         assert response.status_code == 200
-        assert response.json() == [
+        assert sorted(response.json(), key=lambda item: item["id"]) == [
             {
                 "id": seed["target"].id,
                 "property_type": "APT",
@@ -131,37 +130,43 @@ class TestGetSalePropTransactions:
                 "plottage_area": None,
                 "land_area": None,
                 "address": "서울특별시 강남구 역삼동 123-4",
-            }
+            },
+            {
+                "id": seed["same_day"].id,
+                "property_type": "APT",
+                "deal_date": "2026-02-27",
+                "deal_amount": 1_200_000_000,
+                "dealing_type": "중개거래",
+                "house_type": None,
+                "building_name": "역삼래미안",
+                "apartment_dong": "101",
+                "floor": 3,
+                "build_year": 2005,
+                "exclusive_use_area": 84.97,
+                "total_floor_area": None,
+                "plottage_area": None,
+                "land_area": None,
+                "address": "서울특별시 강남구 역삼동 123-5",
+            },
         ]
-
-    async def test_returns_all_sigungu_when_only_sido_given(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
-    ) -> None:
-        """시도만 주면 시군구·계약일과 상관없이 그 시도의 같은 유형 매매를 모두 준다."""
-        response = await client.get(SALES_URL, params={"property_type": "APT", "sido_code": "11"})
-
-        assert response.status_code == 200
-        assert {item["id"] for item in response.json()} == {
-            seed[name].id for name in ("target", "other_date", "other_sigungu", "unknown_region")
-        }
 
     async def test_paginates_by_limit_and_offset(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
         """limit·offset만큼 잘라 id 오름차순으로 준다."""
-        ids = sorted(seed[name].id for name in ("target", "other_date", "other_sigungu", "unknown_region"))
-        params = {"property_type": "APT", "sido_code": "11", "limit": 2, "offset": 1}
+        ids = sorted(seed[name].id for name in ("target", "same_day"))
+        params = REQUIRED_PARAMS | {"limit": 1, "offset": 1}
 
         response = await client.get(SALES_URL, params=params)
 
         assert response.status_code == 200
-        assert [item["id"] for item in response.json()] == ids[1:3]
+        assert [item["id"] for item in response.json()] == ids[1:2]
 
     async def test_omits_region_name_when_legal_dong_code_missing(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
         """법정동코드에 없는 시군구면 주소에서 지역명을 빼고 읍면동·지번만 준다."""
-        params = {"property_type": "APT", "sido_code": "11", "sigungu_code": "999"}
+        params = REQUIRED_PARAMS | {"sigungu_code": "999"}
 
         response = await client.get(SALES_URL, params=params)
 
@@ -172,7 +177,7 @@ class TestGetSalePropTransactions:
 
     async def test_rejects_missing_api_key(self, client: httpx.AsyncClient) -> None:
         """X-API-KEY 헤더가 없으면 401 공통 오류 응답을 준다."""
-        request = client.build_request("GET", SALES_URL, params={"property_type": "APT"})
+        request = client.build_request("GET", SALES_URL, params=REQUIRED_PARAMS)
         del request.headers["X-API-KEY"]
 
         response = await client.send(request)
@@ -180,31 +185,6 @@ class TestGetSalePropTransactions:
         assert response.status_code == 401
         assert response.json() == {
             "message": "API 키가 올바르지 않습니다",
-            "errors": [],
-            "trace_id": response.headers["X-Trace-ID"],
-        }
-
-    async def test_rejects_sigungu_without_sido(self, client: httpx.AsyncClient) -> None:
-        """sido_code 없이 sigungu_code만 오면 400을 준다."""
-        response = await client.get(SALES_URL, params={"property_type": "APT", "sigungu_code": "680"})
-
-        assert response.status_code == 400
-        assert response.json() == {
-            "message": "sigungu_code는 sido_code와 함께 지정해야 한다",
-            "errors": [],
-            "trace_id": response.headers["X-Trace-ID"],
-        }
-
-    @pytest.mark.parametrize("params", DEAL_DATE_WITHOUT_REGION_PARAMS)
-    async def test_rejects_deal_date_without_sido_and_sigungu(
-        self, client: httpx.AsyncClient, params: dict[str, str]
-    ) -> None:
-        """deal_date가 sido_code나 sigungu_code 없이 오면 400을 준다."""
-        response = await client.get(SALES_URL, params=params)
-
-        assert response.status_code == 400
-        assert response.json() == {
-            "message": "deal_date는 sido_code, sigungu_code와 함께 지정해야 한다",
             "errors": [],
             "trace_id": response.headers["X-Trace-ID"],
         }
@@ -246,9 +226,7 @@ class TestGetRentPropTransactions:
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
     ) -> None:
         """유형·시도·시군구·계약일이 모두 맞는 전세·월세를 지역명을 붙인 주소와 함께 준다."""
-        params = {"property_type": "APT", "sido_code": "11", "sigungu_code": "680", "deal_date": "2026-02-27"}
-
-        response = await client.get(RENTS_URL, params=params)
+        response = await client.get(RENTS_URL, params=REQUIRED_PARAMS)
 
         assert response.status_code == 200
         assert sorted(response.json(), key=lambda item: item["id"]) == [
@@ -286,34 +264,23 @@ class TestGetRentPropTransactions:
             },
         ]
 
-    async def test_returns_all_sigungu_when_only_sido_given(
-        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
-    ) -> None:
-        """시도만 주면 시군구·계약일과 상관없이 그 시도의 같은 유형 전월세를 모두 준다."""
-        response = await client.get(RENTS_URL, params={"property_type": "APT", "sido_code": "11"})
-
-        assert response.status_code == 200
-        assert {item["id"] for item in response.json()} == {
-            seed[name].id for name in ("target", "monthly", "other_date", "other_sigungu", "unknown_region")
-        }
-
     async def test_paginates_by_limit_and_offset(
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
     ) -> None:
         """limit·offset만큼 잘라 id 오름차순으로 준다."""
-        ids = sorted(seed[name].id for name in ("target", "monthly", "other_date", "other_sigungu", "unknown_region"))
-        params = {"property_type": "APT", "sido_code": "11", "limit": 2, "offset": 1}
+        ids = sorted(seed[name].id for name in ("target", "monthly"))
+        params = REQUIRED_PARAMS | {"limit": 1, "offset": 1}
 
         response = await client.get(RENTS_URL, params=params)
 
         assert response.status_code == 200
-        assert [item["id"] for item in response.json()] == ids[1:3]
+        assert [item["id"] for item in response.json()] == ids[1:2]
 
     async def test_omits_region_name_when_legal_dong_code_missing(
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
     ) -> None:
         """법정동코드에 없는 시군구면 주소에서 지역명을 빼고 읍면동·지번만 준다."""
-        params = {"property_type": "APT", "sido_code": "11", "sigungu_code": "999"}
+        params = REQUIRED_PARAMS | {"sigungu_code": "999"}
 
         response = await client.get(RENTS_URL, params=params)
 
@@ -324,7 +291,7 @@ class TestGetRentPropTransactions:
 
     async def test_rejects_missing_api_key(self, client: httpx.AsyncClient) -> None:
         """X-API-KEY 헤더가 없으면 401 공통 오류 응답을 준다."""
-        request = client.build_request("GET", RENTS_URL, params={"property_type": "APT"})
+        request = client.build_request("GET", RENTS_URL, params=REQUIRED_PARAMS)
         del request.headers["X-API-KEY"]
 
         response = await client.send(request)
@@ -332,31 +299,6 @@ class TestGetRentPropTransactions:
         assert response.status_code == 401
         assert response.json() == {
             "message": "API 키가 올바르지 않습니다",
-            "errors": [],
-            "trace_id": response.headers["X-Trace-ID"],
-        }
-
-    async def test_rejects_sigungu_without_sido(self, client: httpx.AsyncClient) -> None:
-        """sido_code 없이 sigungu_code만 오면 400을 준다."""
-        response = await client.get(RENTS_URL, params={"property_type": "APT", "sigungu_code": "680"})
-
-        assert response.status_code == 400
-        assert response.json() == {
-            "message": "sigungu_code는 sido_code와 함께 지정해야 한다",
-            "errors": [],
-            "trace_id": response.headers["X-Trace-ID"],
-        }
-
-    @pytest.mark.parametrize("params", DEAL_DATE_WITHOUT_REGION_PARAMS)
-    async def test_rejects_deal_date_without_sido_and_sigungu(
-        self, client: httpx.AsyncClient, params: dict[str, str]
-    ) -> None:
-        """deal_date가 sido_code나 sigungu_code 없이 오면 400을 준다."""
-        response = await client.get(RENTS_URL, params=params)
-
-        assert response.status_code == 400
-        assert response.json() == {
-            "message": "deal_date는 sido_code, sigungu_code와 함께 지정해야 한다",
             "errors": [],
             "trace_id": response.headers["X-Trace-ID"],
         }

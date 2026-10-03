@@ -9,10 +9,11 @@ from . import PropTrendCoreModel
 class PropTransactionQuery(PropTrendCoreModel):
     """실거래 목록 조회 조건."""
 
+    # 넓은 범위를 id 순으로 자르면 쿼리가 수 초~수십 초 걸려서, 갱신용 인덱스와 맞는 네 조건을 모두 받는다.
     property_type: PropertyType
-    sido_code: str | None = Field(default=None, pattern=r"^\d{2}$")
-    sigungu_code: str | None = Field(default=None, pattern=r"^\d{3}$")
-    deal_date: date | None = None
+    sido_code: str = Field(pattern=r"^\d{2}$")
+    sigungu_code: str = Field(pattern=r"^\d{3}$")
+    deal_date: date
     # 한 요청이 테이블 전체를 읽지 않도록 한 페이지의 최대 행 수를 서버에서 제한한다.
     limit: int = Field(default=100, ge=1, le=1000)
     offset: int = Field(default=0, ge=0)
