@@ -5,3 +5,15 @@ class PropTrendError(Exception):
     """애플리케이션 예외의 기반. 전역 핸들러가 status_code로 응답한다."""
 
     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
+
+
+class InvalidCredentialsError(PropTrendError):
+    """로그인 이메일 또는 비밀번호가 일치하지 않는다."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED
+
+
+class UnauthenticatedError(PropTrendError):
+    """세션 쿠키가 없거나 만료·무효한 세션이다."""
+
+    status_code = status.HTTP_401_UNAUTHORIZED

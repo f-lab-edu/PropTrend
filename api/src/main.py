@@ -18,6 +18,7 @@ from .exceptions import PropTrendError
 from .logging_config import configure_logging
 from .middlewares import RequestIdFilter, log_requests
 from .routers.prop_transaction import router as prop_transaction_router
+from .routers.user import router as user_router
 
 load_dotenv()
 
@@ -54,6 +55,7 @@ app.include_router(
     prefix="/api/prop-transactions",
     tags=["prop_transaction"],
 )
+app.include_router(user_router, prefix="/api/users", tags=["user"])
 
 
 @app.get("/health")

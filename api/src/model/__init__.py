@@ -4,6 +4,7 @@
 - prop_transaction: rtms_raw_items를 가공해 채우는 매매/전월세 정제 테이블
 - load_progress: 백필 스크립트가 적재를 마친 원본 파일 기록
 - refresh_unit_state: 갱신 파이프라인이 끝내지 못한 단위 목록
+- user: 서비스 사용자 계정과 로그인 세션
 """
 
 from .base import Base
@@ -21,6 +22,7 @@ from .raw import (
     RTMSRawItem,
 )
 from .refresh_unit_state import LAST_ERROR_MAX, RefreshUnitState, UnitStatus
+from .user import User, UserSession
 
 __all__ = [
     "LAST_ERROR_MAX",
@@ -36,4 +38,6 @@ __all__ = [
     "SaleTransaction",
     "TransactionMixin",
     "UnitStatus",
+    "User",
+    "UserSession",
 ]
