@@ -175,20 +175,6 @@ class TestGetSalePropTransactions:
             (seed["unknown_region"].id, "개포동 1-1")
         ]
 
-    async def test_rejects_missing_api_key(self, client: httpx.AsyncClient) -> None:
-        """X-API-KEY 헤더가 없으면 401 공통 오류 응답을 준다."""
-        request = client.build_request("GET", SALES_URL, params=REQUIRED_PARAMS)
-        del request.headers["X-API-KEY"]
-
-        response = await client.send(request)
-
-        assert response.status_code == 401
-        assert response.json() == {
-            "message": "API 키가 올바르지 않습니다",
-            "errors": [],
-            "trace_id": response.headers["X-Trace-ID"],
-        }
-
     @pytest.mark.parametrize(("params", "field", "error_type"), INVALID_PARAMS)
     async def test_rejects_invalid_query(
         self, client: httpx.AsyncClient, params: dict[str, Any], field: str, error_type: str
@@ -288,20 +274,6 @@ class TestGetRentPropTransactions:
         assert [(item["id"], item["address"]) for item in response.json()] == [
             (seed["unknown_region"].id, "개포동 1-1")
         ]
-
-    async def test_rejects_missing_api_key(self, client: httpx.AsyncClient) -> None:
-        """X-API-KEY 헤더가 없으면 401 공통 오류 응답을 준다."""
-        request = client.build_request("GET", RENTS_URL, params=REQUIRED_PARAMS)
-        del request.headers["X-API-KEY"]
-
-        response = await client.send(request)
-
-        assert response.status_code == 401
-        assert response.json() == {
-            "message": "API 키가 올바르지 않습니다",
-            "errors": [],
-            "trace_id": response.headers["X-Trace-ID"],
-        }
 
     @pytest.mark.parametrize(("params", "field", "error_type"), INVALID_PARAMS)
     async def test_rejects_invalid_query(

@@ -1,34 +1,24 @@
-"""앱 기동 시점의 설정 검증 테스트."""
+"""앱 수준 엔드포인트 테스트."""
 
-from collections.abc import Iterator
-from pathlib import Path
+from collections.abc import AsyncIterator
 
+import httpx
 import pytest
-from pydantic import ValidationError
 
-from src.config import get_settings
-from src.main import app, lifespan
+from src.main import app
 
 
-class TestLifespan:
-    @pytest.fixture(autouse=True)
-    def setup(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> Iterator[None]:
-        # 실행 위치의 .env가 API_KEY를 채우지 않도록 빈 디렉터리에서 돌린다.
-        monkeypatch.chdir(tmp_path)
-        get_settings.cache_clear()
-        yield
-        get_settings.cache_clear()
+class TestHealthCheck:
+    @pytest.fixture
+    async def client(self) -> AsyncIterator[httpx.AsyncClient]:
+        # DB를 거치지 않는 엔드포인트라 테스트 DB 없이 앱만 띄운다.
+        transport = httpx.ASGITransport(app=app)
+        async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+            yield client
 
-    async def test_fails_without_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("API_KEY", raising=False)
+    async def test_returns_ok(self, client: httpx.AsyncClient) -> None:
+        """인증 없이 200과 상태 ok를 준다."""
+        response = await client.get("/health")
 
-        with pytest.raises(ValidationError, match="api_key"):
-            async with lifespan(app):
-                pass
-
-    async def test_fails_with_empty_api_key(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("API_KEY", "")
-
-        with pytest.raises(ValidationError, match="api_key"):
-            async with lifespan(app):
-                pass
+        assert response.status_code == 200
+        assert response.json() == {"status": "ok"}

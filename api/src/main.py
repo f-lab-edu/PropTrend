@@ -2,13 +2,12 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import get_settings
 from .db import create_tables, dispose_engine
-from .dependencies import verify_api_key
 from .exception_handlers import (
     http_exception_handler,
     prop_trend_error_handler,
@@ -54,7 +53,6 @@ app.include_router(
     prop_transaction_router,
     prefix="/api/prop-transactions",
     tags=["prop_transaction"],
-    dependencies=[Depends(verify_api_key)],
 )
 
 

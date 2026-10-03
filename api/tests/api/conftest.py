@@ -8,17 +8,13 @@ from typing import Any
 import httpx
 import pytest
 import pytest_asyncio
-from pydantic import SecretStr
 from sqlalchemy import delete, insert, inspect, make_url, text, tuple_
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
 
-from src.config import Settings, get_settings
 from src.dependencies import get_session
 from src.main import app
 from src.model import Base
 from src.services import prop_transaction as prop_transaction_service
-
-API_KEY = "test-api-key"
 
 # 실데이터가 든 prop_trend와 분리한다. 테이블을 지우고 다시 만들기 때문에 이름이 _test로 끝나야만 쓴다.
 TEST_DATABASE_URL = os.environ.get(
@@ -77,7 +73,7 @@ async def session_factory(test_engine: AsyncEngine) -> async_sessionmaker[AsyncS
 async def client(
     monkeypatch: pytest.MonkeyPatch, session_factory: async_sessionmaker[AsyncSession]
 ) -> AsyncIterator[httpx.AsyncClient]:
-    """테스트 DB 세션을 주입하고 X-API-KEY를 기본으로 싣는 클라이언트."""
+    """테스트 DB 세션을 주입한 클라이언트."""
 
     async def get_test_session() -> AsyncIterator[AsyncSession]:
         async with session_factory() as session:
@@ -86,8 +82,7 @@ async def client(
     # 지역명 캐시가 앞 테스트의 시드를 들고 있지 않도록 매번 비운다.
     monkeypatch.setattr(prop_transaction_service, "_region_names_loaded_at", None)
     app.dependency_overrides[get_session] = get_test_session
-    app.dependency_overrides[get_settings] = lambda: Settings(api_key=SecretStr(API_KEY))
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test", headers={"X-API-KEY": API_KEY}) as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
         yield c
     app.dependency_overrides.clear()
