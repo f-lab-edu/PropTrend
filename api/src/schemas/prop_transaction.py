@@ -75,3 +75,40 @@ class RentPropTransactionResponse(AddressResponse):
     build_year: int | None = None  # 아파트, 연립다세대
     exclusive_use_area: float | None = None  # 아파트, 연립다세대, 오피스텔
     total_floor_area: float | None = None  # 단독다가구
+
+
+class SalePriceTrendPoint(PropTrendCoreModel):
+    """매매 실거래가 추이의 거래 한 건."""
+
+    id: int
+    deal_date: date
+    deal_amount: int
+    floor: int | None
+
+
+class RentPriceTrendPoint(PropTrendCoreModel):
+    """전월세 실거래가 추이의 거래 한 건."""
+
+    id: int
+    deal_date: date
+    deposit: int
+    monthly_rent: int
+    floor: int | None
+
+
+class SalePropTransactionDetailResponse(PropTrendCoreModel):
+    """매매 실거래 상세 응답."""
+
+    base_transaction: SalePropTransactionResponse
+    # 같은 그룹으로 묶인 거래들의 실거래가 추이. 그룹을 정할 수 없는 단독다가구는 null.
+    trend: list[SalePriceTrendPoint] | None
+
+
+class RentPropTransactionDetailResponse(PropTrendCoreModel):
+    """전월세 실거래 상세 응답."""
+
+    base_transaction: RentPropTransactionResponse
+    # 같은 그룹으로 묶인 거래들의 실거래가 추이. 보증금끼리 비교되도록 전세와 월세를 나눈다.
+    # 그룹을 정할 수 없는 단독다가구는 둘 다 null.
+    jeonse_trend: list[RentPriceTrendPoint] | None
+    monthly_rent_trend: list[RentPriceTrendPoint] | None

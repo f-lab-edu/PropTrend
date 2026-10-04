@@ -1,11 +1,22 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Query, status
+from fastapi import APIRouter, Depends, Path, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dependencies import get_session
-from ..schemas.prop_transaction import PropTransactionQuery, RentPropTransactionResponse, SalePropTransactionResponse
-from ..services.prop_transaction import get_rent_transactions, get_sale_transactions
+from ..schemas.prop_transaction import (
+    PropTransactionQuery,
+    RentPropTransactionDetailResponse,
+    RentPropTransactionResponse,
+    SalePropTransactionDetailResponse,
+    SalePropTransactionResponse,
+)
+from ..services.prop_transaction import (
+    get_rent_transaction_detail,
+    get_rent_transactions,
+    get_sale_transaction_detail,
+    get_sale_transactions,
+)
 
 router = APIRouter()
 
@@ -52,3 +63,53 @@ async def get_rent_prop_transactions(
     """전월세 실거래 목록을 조회한다."""
     async with session.begin():
         return await get_rent_transactions(session, query)
+
+
+@router.get(
+    "/sales/{transaction_id}",
+    status_code=status.HTTP_200_OK,
+    summary="매매 실거래 상세 조회",
+    description=(
+        "매매 실거래 한 건의 상세 정보를 반환합니다.\n\n"
+        "- `base_transaction`은 조회한 거래 정보입니다.\n"
+        "- `trend`는 조회한 거래와 같은 그룹으로 묶인 거래들의 실거래가 추이이며 계약일 오름차순입니다.\n"
+        "- 같은 그룹은 아파트·오피스텔이면 같은 시군구·읍면동·지번·건물명·전용면적, "
+        "연립다세대면 같은 시군구·읍면동·지번·건축년도인 거래입니다. 조회한 거래도 포함합니다.\n"
+        "- 해제된 거래는 `trend`에서 뺍니다.\n"
+        "- 단독다가구는 같은 매물을 특정할 수 없어 `trend`가 `null`입니다.\n"
+        "- `deal_amount`의 단위는 원입니다.\n"
+        "- `transaction_id`에 해당하는 매매 거래가 없으면 404를 반환합니다."
+    ),
+)
+async def get_sale_prop_transaction_detail(
+    transaction_id: Annotated[int, Path(ge=1)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> SalePropTransactionDetailResponse:
+    """매매 실거래 상세 정보를 조회한다."""
+    async with session.begin():
+        return await get_sale_transaction_detail(session, transaction_id)
+
+
+@router.get(
+    "/rents/{transaction_id}",
+    status_code=status.HTTP_200_OK,
+    summary="전월세 실거래 상세 조회",
+    description=(
+        "전월세 실거래 한 건의 상세 정보를 반환합니다.\n\n"
+        "- `base_transaction`은 조회한 거래 정보입니다.\n"
+        "- `jeonse_trend`, `monthly_rent_trend`는 조회한 거래와 같은 그룹으로 묶인 거래들의 실거래가 추이를 "
+        "전세(`monthly_rent`가 0)와 월세로 나눈 것이며 계약일 오름차순입니다.\n"
+        "- 같은 그룹은 아파트·오피스텔이면 같은 시군구·읍면동·지번·건물명·전용면적, "
+        "연립다세대면 같은 시군구·읍면동·지번·건축년도인 거래입니다. 조회한 거래도 포함합니다.\n"
+        "- 단독다가구는 같은 매물을 특정할 수 없어 `jeonse_trend`, `monthly_rent_trend`가 `null`입니다.\n"
+        "- `deposit`, `monthly_rent`의 단위는 원입니다.\n"
+        "- `transaction_id`에 해당하는 전월세 거래가 없으면 404를 반환합니다."
+    ),
+)
+async def get_rent_prop_transaction_detail(
+    transaction_id: Annotated[int, Path(ge=1)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RentPropTransactionDetailResponse:
+    """전월세 실거래 상세 정보를 조회한다."""
+    async with session.begin():
+        return await get_rent_transaction_detail(session, transaction_id)

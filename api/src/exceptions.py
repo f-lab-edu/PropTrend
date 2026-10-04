@@ -17,3 +17,9 @@ class UnauthenticatedError(PropTrendError):
     """세션 쿠키가 없거나 만료·무효한 세션이다."""
 
     status_code = status.HTTP_401_UNAUTHORIZED
+
+
+class TransactionNotFoundError(PropTrendError):
+    """요청한 id의 실거래가 없다."""
+
+    status_code = status.HTTP_404_NOT_FOUND
