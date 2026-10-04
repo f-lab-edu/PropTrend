@@ -7,7 +7,6 @@ from datetime import date
 from typing import Any
 
 import pytest
-from conftest import FakeSession
 
 from src.jobs import pipeline
 from src.jobs.collector import DailyLimitReachedError
@@ -23,6 +22,7 @@ from src.jobs.pipeline import (
 )
 from src.jobs.state import MAX_ATTEMPTS, UnitRecord
 from src.model import RTMS_KNOWN_FIELDS, PropertyType, UnitStatus
+from tests.jobs.conftest import FakeSession
 
 # 단계별로 다른 값을 돌려줘야 UnitResult가 어느 단계의 결과를 어디에 담는지 확인할 수 있다.
 API_ITEMS = 2

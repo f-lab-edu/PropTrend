@@ -3,11 +3,11 @@
 from typing import Any
 
 import pytest
-from conftest import FakeSession
 from sqlalchemy.dialects import postgresql
 
 from src.jobs.state import MAX_ATTEMPTS, RefreshUnitStateStore, UnitRecord, summarize_error
 from src.model import LAST_ERROR_MAX, UnitStatus
+from tests.jobs.conftest import FakeSession
 
 
 def compiled(session: FakeSession) -> str:

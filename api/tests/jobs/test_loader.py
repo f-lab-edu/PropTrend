@@ -4,10 +4,10 @@ import logging
 from typing import Any
 
 import pytest
-from conftest import FakeSession
 
 from src.jobs import loader as loader_module
 from src.jobs.loader import RTMSRawItemLoader, SaleTransactionLoader
+from tests.jobs.conftest import FakeSession
 
 
 def sale_row(**overrides: Any) -> dict[str, Any]:

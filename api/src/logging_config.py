@@ -71,8 +71,8 @@ class JsonFormatter(logging.Formatter):
         payload: dict[str, object] = _extra_fields(record)
 
         payload |= {
-            # 컨테이너 TZ(Asia/Seoul) 기준 오프셋이 붙는다. 수집기가 UTC로 환산할 수 있다.
-            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).astimezone().isoformat(),
+            # 컨테이너 TZ(Asia/Seoul)와 무관하게 UTC로 남겨 프로세스·서버 간 로그를 그대로 맞춰본다.
+            "timestamp": datetime.fromtimestamp(record.created, tz=UTC).isoformat(),
             "level": record.levelname,
             "service": self.service,
             "logger": record.name,
@@ -96,6 +96,10 @@ class JsonFormatter(logging.Formatter):
 
 class TextFormatter(logging.Formatter):
     """사람이 읽는 한 줄. 필터가 붙인 컨텍스트를 메시지 끝에 덧붙인다."""
+
+    def formatTime(self, record: logging.LogRecord, datefmt: str | None = None) -> str:  # noqa: N802
+        """asctime을 JSON의 timestamp와 같은 UTC ISO 8601로 찍는다."""
+        return datetime.fromtimestamp(record.created, tz=UTC).isoformat(timespec="milliseconds")
 
     def format(self, record: logging.LogRecord) -> str:
         text = super().format(record)
@@ -156,7 +160,9 @@ def configure_logging(
     root.addHandler(stream)
 
     # 파일 핸들러를 만들다 실패하면 경고를 남기는데, stdout 핸들러가 먼저 붙어 있어야 그 경고가 보인다.
-    path = log_file or os.environ.get("LOG_FILE")
+    # 경로는 서비스마다 따로 읽는다(API_LOG_FILE, PIPELINE_LOG_FILE). 두 프로세스가 한 파일을
+    # 각자 로테이션하면 서로의 파일을 옮겨 버려 로그가 유실된다.
+    path = log_file or os.environ.get(f"{service.upper()}_LOG_FILE")
     file_handler = _file_handler(path, service) if path else None
     if file_handler is not None:
         root.addHandler(file_handler)

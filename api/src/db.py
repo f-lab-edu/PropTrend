@@ -1,7 +1,7 @@
 """PostgreSQL 비동기 세션 구성"""
 
 import os
-from collections.abc import AsyncGenerator, AsyncIterator
+from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
 from sqlalchemy.ext.asyncio import (
@@ -30,7 +30,8 @@ def get_engine() -> AsyncEngine:
 def get_session_factory() -> async_sessionmaker[AsyncSession]:
     global _session_factory
     if _session_factory is None:
-        _session_factory = async_sessionmaker(get_engine(), expire_on_commit=False)
+        # 트랜잭션 경계는 호출하는 쪽이 begin()으로 정한다. begin() 없이 쿼리하면 에러가 난다.
+        _session_factory = async_sessionmaker(get_engine(), expire_on_commit=False, autobegin=False)
     return _session_factory
 
 
@@ -38,12 +39,6 @@ def get_session_factory() -> async_sessionmaker[AsyncSession]:
 async def session_scope() -> AsyncGenerator[AsyncSession]:
     """데이터베이스 세션 제공 함수"""
     async with get_session_factory()() as session, session.begin():
-        yield session
-
-
-async def get_session() -> AsyncIterator[AsyncSession]:
-    """데이터베이스 세션 의존성 주입 함수"""
-    async with get_session_factory()() as session:
         yield session
 
 
