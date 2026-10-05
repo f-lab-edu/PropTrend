@@ -114,7 +114,14 @@ export const COLUMNS = {
   },
 };
 
-export function showMessage(element, text) {
-  element.textContent = text;
-  element.classList.remove("hidden");
+export function showMessage(target, text) {
+  target.textContent = text;
+  target.classList.remove("hidden");
+}
+
+export function element(tag, className, text) {
+  const node = document.createElement(tag);
+  node.className = className;
+  if (text !== undefined) node.textContent = text;
+  return node;
 }

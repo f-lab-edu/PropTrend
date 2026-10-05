@@ -1,14 +1,7 @@
-import { PROPERTY_TYPE_LABELS, formatArea, formatDate, formatWon, transactionTitle } from "/common.js";
+import { PROPERTY_TYPE_LABELS, element, formatArea, formatDate, formatWon, transactionTitle } from "/common.js";
 
 const container = document.getElementById("daily-summary");
 const CARD_CLASS = "flex flex-col rounded-xl bg-white p-5 shadow-sm";
-
-function element(tag, className, text) {
-  const node = document.createElement(tag);
-  node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
-}
 
 function countCard(count) {
   const card = element("div", CARD_CLASS);
