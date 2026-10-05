@@ -13,6 +13,12 @@ class InvalidCredentialsError(PropTrendError):
     status_code = status.HTTP_401_UNAUTHORIZED
 
 
+class DuplicateEmailError(PropTrendError):
+    """이미 가입된 이메일로 회원가입했다."""
+
+    status_code = status.HTTP_409_CONFLICT
+
+
 class UnauthenticatedError(PropTrendError):
     """세션 쿠키가 없거나 만료·무효한 세션이다."""
 

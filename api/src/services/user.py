@@ -6,9 +6,10 @@ from datetime import UTC, datetime, timedelta
 from argon2 import PasswordHasher
 from argon2.exceptions import VerifyMismatchError
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..exceptions import InvalidCredentialsError, UnauthenticatedError
+from ..exceptions import DuplicateEmailError, InvalidCredentialsError, UnauthenticatedError
 from ..model.user import User, UserSession
 from ..schemas.user import LoginRequest, SignUpRequest, UserResponse
 
@@ -34,7 +35,11 @@ async def create_user(session: AsyncSession, body: SignUpRequest) -> UserRespons
     hashed_password = await asyncio.to_thread(password_hasher.hash, body.password)
     user = User(email=body.email, nickname=body.nickname, password=hashed_password)
     session.add(user)
-    await session.flush()
+    # 미리 조회하면 동시에 같은 이메일로 가입할 때 둘 다 통과하므로 UNIQUE 제약 위반으로 판단한다.
+    try:
+        await session.flush()
+    except IntegrityError as e:
+        raise DuplicateEmailError("이미 가입된 이메일입니다") from e
     return UserResponse.model_validate(user)
 
 

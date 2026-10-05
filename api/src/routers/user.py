@@ -22,7 +22,9 @@ SESSION_COOKIE_OPTIONS = {"path": "/", "httponly": True, "secure": True, "samesi
     status_code=status.HTTP_201_CREATED,
     summary="회원가입",
     description=(
-        "이메일, 닉네임, 비밀번호로 사용자를 생성합니다.\n\n- 생성된 사용자 정보를 `password`를 제외하고 반환합니다."
+        "이메일, 닉네임, 비밀번호로 사용자를 생성합니다.\n\n"
+        "- 생성된 사용자 정보를 `password`를 제외하고 반환합니다.\n"
+        "- 이미 가입된 이메일이면 409를 반환합니다."
     ),
 )
 async def sign_up(

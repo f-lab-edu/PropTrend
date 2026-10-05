@@ -1,4 +1,4 @@
-"""로그인·로그아웃·내 정보 조회 API 테스트."""
+"""회원가입·로그인·로그아웃·내 정보 조회 API 테스트."""
 
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
@@ -8,7 +8,7 @@ from typing import Any
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.model import User, UserSession
@@ -20,6 +20,7 @@ from .conftest import seed_rows
 # 세션 범위 엔진의 커넥션을 같은 이벤트 루프에서 재사용한다.
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
+SIGN_UP_URL = "/api/users/sign-up"
 LOGIN_URL = "/api/users/login"
 LOGOUT_URL = "/api/users/logout"
 ME_URL = "/api/users/me"
@@ -40,6 +41,83 @@ def session_cookie_header(token: str) -> dict[str, str]:
 def session_row(user: User, token: str, expires_in: timedelta) -> dict[str, Any]:
     """사용자의 세션 시드 행을 만든다."""
     return {"token_hash": hash_session_token(token), "user_id": user.id, "expires_at": datetime.now(UTC) + expires_in}
+
+
+class TestSignUp:
+    @pytest_asyncio.fixture(scope="class", loop_scope="session")
+    @classmethod
+    async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, User]]:
+        rows = {"existing": USER_ROW | {"email": "existing@example.com"}}
+        async with seed_rows(session_factory, User, list(rows.values())) as users:
+            yield dict(zip(rows, users, strict=True))
+
+    async def test_creates_user(
+        self, client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """사용자를 만들어 비밀번호를 뺀 정보로 201을 주고, 비밀번호는 해시로 저장한다."""
+        body = {"email": "new@example.com", "nickname": "새사용자", "password": PASSWORD}
+        try:
+            response = await client.post(SIGN_UP_URL, json=body)
+
+            async with session_factory() as session, session.begin():
+                user = await session.scalar(select(User).where(User.email == body["email"]))
+        finally:
+            # API가 만든 행은 seed_rows가 모르므로 직접 지운다.
+            async with session_factory() as session, session.begin():
+                await session.execute(delete(User).where(User.email == body["email"]))
+
+        assert response.status_code == 201
+        assert user is not None
+        assert response.json() == UserResponse.model_validate(user).model_dump(mode="json")
+        assert user.nickname == body["nickname"]
+        assert password_hasher.verify(user.password, PASSWORD)
+
+    async def test_rejects_duplicate_email(self, client: httpx.AsyncClient, seed: dict[str, User]) -> None:
+        """이미 가입된 이메일이면 409 공통 오류 응답을 준다."""
+        body = {"email": seed["existing"].email, "nickname": "중복", "password": PASSWORD}
+
+        response = await client.post(SIGN_UP_URL, json=body)
+
+        assert response.status_code == 409
+        assert response.json() == {
+            "message": "이미 가입된 이메일입니다",
+            "errors": [],
+            "trace_id": response.headers["X-Trace-ID"],
+        }
+
+    @pytest.mark.parametrize(
+        ("body", "field", "error_type"),
+        [
+            pytest.param(
+                {"email": "not-an-email", "nickname": "테스터", "password": PASSWORD},
+                "email",
+                "value_error",
+                id="invalid_email",
+            ),
+            pytest.param(
+                {"email": "short@example.com", "nickname": "가", "password": PASSWORD},
+                "nickname",
+                "string_too_short",
+                id="short_nickname",
+            ),
+            pytest.param(
+                {"email": "short@example.com", "nickname": "테스터", "password": "1234567"},
+                "password",
+                "string_too_short",
+                id="short_password",
+            ),
+        ],
+    )
+    async def test_rejects_invalid_body(
+        self, client: httpx.AsyncClient, body: dict[str, str], field: str, error_type: str
+    ) -> None:
+        """요청 본문이 스키마 제약을 어기면 422와 함께 실패한 필드와 오류 종류를 준다."""
+        response = await client.post(SIGN_UP_URL, json=body)
+
+        result = response.json()
+        assert response.status_code == 422
+        assert result["message"] == "요청 값이 올바르지 않습니다"
+        assert [(error["loc"], error["type"]) for error in result["errors"]] == [(["body", field], error_type)]
 
 
 class TestLogin:
