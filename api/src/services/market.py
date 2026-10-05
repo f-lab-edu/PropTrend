@@ -1,10 +1,16 @@
-from datetime import date
+from datetime import date, timedelta
 
 from sqlalchemy import Date, Interval, Numeric, cast, func, literal, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction
-from ..schemas.market import DailySummaryResponse, PriceMover, PriceMoversResponse
+from ..schemas.market import (
+    DailySummaryResponse,
+    PriceMover,
+    PriceMoversResponse,
+    VolumeSurgeRegion,
+    VolumeSurgeRegionsResponse,
+)
 from ..schemas.prop_transaction import SalePriceTrendPoint
 from .prop_transaction import (
     EMPTY_TREND_ON_NULL_KEY_TYPES,
@@ -20,6 +26,9 @@ PRICE_MOVER_LOOKBACK_YEARS = 10
 # 최근 거래가 이 기간 안에 있는 단지만 순위에 넣는다. 오래전 거래끼리 비교한 결과가 섞이지 않게 한다.
 PRICE_MOVER_RECENT_YEARS = 1
 PRICE_MOVER_LIMIT = 5
+# 실거래는 계약 후 30일 안에 신고되므로 신고 기한이 지난 구간끼리 비교하도록 이만큼 늦춘다.
+VOLUME_SURGE_REPORT_DELAY_MONTHS = 1
+VOLUME_SURGE_LIMIT = 5
 
 
 async def get_daily_summary(session: AsyncSession, deal_date: date) -> DailySummaryResponse:
@@ -155,4 +164,57 @@ async def get_price_movers(session: AsyncSession, base_date: date) -> PriceMover
             (mover for mover in movers if mover.change_rate < 0),
             key=lambda mover: (mover.change_rate, mover.latest_sale.id),
         ),
+    )
+
+
+async def get_volume_surge_regions(session: AsyncSession, base_date: date) -> VolumeSurgeRegionsResponse:
+    """최근 1개월 매매 건수가 이전 1개월보다 가장 많이 늘어난 시군구를 조회한다."""
+    # 기준일이 월말이어도 깨지지 않도록 월 단위 경계는 PostgreSQL interval 연산으로 구한다.
+    # 경계는 응답에도 실으므로 집계 전에 날짜로 받아 둔다. 최근 구간의 끝부터 1개월씩 거슬러 올라간다.
+    base = literal(base_date, Date)
+    months_before = [VOLUME_SURGE_REPORT_DELAY_MONTHS + offset for offset in range(3)]
+    boundaries = [cast(base - func.make_interval(0, months, type_=Interval), Date) for months in months_before]
+    recent_end, recent_start, previous_start = (await session.execute(select(*boundaries))).one()
+
+    recent_count = func.count().filter(SaleTransaction.deal_date >= recent_start)
+    previous_count = func.count().filter(SaleTransaction.deal_date < recent_start)
+    count_change = (recent_count - previous_count).label("count_change")
+    rows = await session.execute(
+        select(
+            SaleTransaction.sido_code,
+            SaleTransaction.sigungu_code,
+            recent_count.label("recent_count"),
+            previous_count.label("previous_count"),
+            count_change,
+        )
+        .where(
+            SaleTransaction.deal_date >= previous_start,
+            SaleTransaction.deal_date < recent_end,
+            # 해제된 거래는 실제로 성사되지 않았으므로 세지 않는다.
+            SaleTransaction.cancel_deal_type.is_distinct_from("O"),
+        )
+        .group_by(SaleTransaction.sido_code, SaleTransaction.sigungu_code)
+        .having(recent_count - previous_count > 0)
+        # 증가 폭이 같으면 응답이 요청마다 달라지지 않도록 지역코드 순으로 둔다.
+        .order_by(count_change.desc(), SaleTransaction.sido_code, SaleTransaction.sigungu_code)
+        .limit(VOLUME_SURGE_LIMIT)
+    )
+
+    names = await get_region_names(session)
+    return VolumeSurgeRegionsResponse(
+        base_date=base_date,
+        recent_start_date=recent_start,
+        recent_end_date=recent_end - timedelta(days=1),
+        previous_start_date=previous_start,
+        previous_end_date=recent_start - timedelta(days=1),
+        regions=[
+            VolumeSurgeRegion(
+                region_code=row.sido_code + row.sigungu_code,
+                region_name=names.get((row.sido_code, row.sigungu_code)),
+                recent_count=row.recent_count,
+                previous_count=row.previous_count,
+                count_change=row.count_change,
+            )
+            for row in rows
+        ],
     )

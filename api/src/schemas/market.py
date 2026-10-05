@@ -32,3 +32,30 @@ class PriceMoversResponse(PropTrendCoreModel):
     base_date: date
     surge: list[PriceMover]
     plunge: list[PriceMover]
+
+
+class VolumeSurgeRegion(PropTrendCoreModel):
+    """거래량 급등 지역 하나."""
+
+    # 시도코드 2자리 + 시군구코드 3자리.
+    region_code: str
+    # 법정동코드에 없는 지역이면 null.
+    region_name: str | None
+    recent_count: int
+    previous_count: int
+    # recent_count - previous_count.
+    count_change: int
+
+
+class VolumeSurgeRegionsResponse(PropTrendCoreModel):
+    """거래량 급등 지역 TOP 5 응답."""
+
+    # 기간 계산의 기준일.
+    base_date: date
+    # 구간의 시작일과 종료일은 모두 구간에 포함된다.
+    recent_start_date: date
+    recent_end_date: date
+    previous_start_date: date
+    previous_end_date: date
+    # 거래량이 많이 늘어난 순서.
+    regions: list[VolumeSurgeRegion]

@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dependencies import get_session, get_today
-from ..schemas.market import DailySummaryResponse, PriceMoversResponse
-from ..services.market import get_daily_summary, get_price_movers
+from ..schemas.market import DailySummaryResponse, PriceMoversResponse, VolumeSurgeRegionsResponse
+from ..services.market import get_daily_summary, get_price_movers, get_volume_surge_regions
 
 router = APIRouter()
 
@@ -61,3 +61,29 @@ async def get_market_price_movers(
     """거래액 급등/급락 단지 TOP 5를 조회한다."""
     async with session.begin():
         return await get_price_movers(session, today)
+
+
+@router.get(
+    "/volume-surge-regions",
+    status_code=status.HTTP_200_OK,
+    summary="거래량 급등 지역 TOP 5",
+    description=(
+        "시군구별로 최근 1개월과 이전 1개월의 매매 건수를 비교해 건수가 가장 많이 늘어난 지역 5개를 반환합니다.\n\n"
+        "- 실거래는 계약 후 30일 안에 신고되므로 신고 기한이 지난 구간끼리 비교합니다. 기준일(호출일, KST) 기준으로 "
+        "최근 구간은 2개월 전 ~ 1개월 전, 이전 구간은 3개월 전 ~ 2개월 전입니다.\n"
+        "- 구간의 시작일과 종료일(`*_start_date`, `*_end_date`)은 모두 구간에 포함됩니다.\n"
+        "- 부동산 유형 구분 없이 매매만 세고, 해제된 매매는 뺍니다.\n"
+        "- `region_code`는 시도코드 2자리와 시군구코드 3자리를 합친 5자리입니다.\n"
+        "- `count_change`(`recent_count - previous_count`)가 큰 순서이며, 0보다 큰 지역만 담아 5개보다 적을 수 "
+        "있습니다.\n"
+        "- `count_change`가 같으면 `region_code`가 작은 지역이 먼저 옵니다.\n"
+        "- 법정동코드에 없는 지역이면 `region_name`은 `null`입니다."
+    ),
+)
+async def get_market_volume_surge_regions(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    today: Annotated[date, Depends(get_today)],
+) -> VolumeSurgeRegionsResponse:
+    """거래량 급등 지역 TOP 5를 조회한다."""
+    async with session.begin():
+        return await get_volume_surge_regions(session, today)

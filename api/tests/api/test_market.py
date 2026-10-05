@@ -21,6 +21,7 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 
 DAILY_SUMMARY_URL = "/api/market/daily-summary"
 PRICE_MOVERS_URL = "/api/market/price-movers"
+VOLUME_SURGE_REGIONS_URL = "/api/market/volume-surge-regions"
 
 LEGAL_DONG_CODE_ROWS = [
     {"payload": {"sido_cd": "11", "sgg_cd": "680", "locatadd_nm": "서울특별시 강남구"}},
@@ -340,3 +341,159 @@ class TestGetPriceMovers:
 
         assert response.status_code == 200
         assert response.json() == {"base_date": "2028-01-01", "surge": [], "plunge": []}
+
+
+# 거래량 급등 스위트의 기준일. 최근 구간은 2026-08-05~09-04, 이전 구간은 2026-07-05~08-04다.
+VOLUME_SURGE_BASE_DATE = date(2026, 10, 5)
+VOLUME_SURGE_LEGAL_DONG_CODE_ROWS = LEGAL_DONG_CODE_ROWS + [
+    {"payload": {"sido_cd": "11", "sgg_cd": "650", "locatadd_nm": "서울특별시 서초구"}},
+    {"payload": {"sido_cd": "11", "sgg_cd": "710", "locatadd_nm": "서울특별시 송파구"}},
+    {"payload": {"sido_cd": "41", "sgg_cd": "135", "locatadd_nm": "경기도 성남시 분당구"}},
+    {"payload": {"sido_cd": "41", "sgg_cd": "465", "locatadd_nm": "경기도 용인시 수지구"}},
+]
+
+
+class TestGetVolumeSurgeRegions:
+    @pytest_asyncio.fixture(scope="class", loop_scope="session")
+    @classmethod
+    async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[None]:
+        gangnam = SALE_ROW | {"sido_code": "11", "sigungu_code": "680"}
+        seocho = SALE_ROW | {"sido_code": "11", "sigungu_code": "650"}
+        songpa = SALE_ROW | {"sido_code": "11", "sigungu_code": "710"}
+        haeundae = SALE_ROW | {"property_type": PropertyType.OFFICETEL, "sido_code": "26", "sigungu_code": "350"}
+        bundang = SALE_ROW | {"sido_code": "41", "sigungu_code": "135"}
+        suji = SALE_ROW | {"sido_code": "41", "sigungu_code": "465"}
+        # 법정동코드에 없는 지역.
+        unnamed = SALE_ROW | {"sido_code": "50", "sigungu_code": "999"}
+        recent, previous = {"deal_date": date(2026, 8, 20)}, {"deal_date": date(2026, 7, 20)}
+        # 기준일을 2026-11-05로 옮기면 최근 구간이 되는 날짜. 2026-10-05 기준으로는 신고 기한 전이라 세지 않는다.
+        unreported = {"deal_date": date(2026, 9, 20)}
+        sale_rows = [
+            # 강남구 최근 7건, 이전 2건 → +5. 구간 경계일을 포함한다.
+            *[gangnam | recent] * 5,
+            gangnam | {"deal_date": date(2026, 8, 5)},
+            gangnam | {"deal_date": date(2026, 9, 4)},
+            gangnam | {"deal_date": date(2026, 7, 5)},
+            gangnam | {"deal_date": date(2026, 8, 4)},
+            # 강남구에서 세지 않는 매매: 구간 밖, 해제.
+            gangnam | {"deal_date": date(2026, 9, 5)},
+            gangnam | {"deal_date": date(2026, 7, 4)},
+            gangnam | recent | {"cancel_deal_type": "O"},
+            # 서초구 최근 4건, 이전 0건 → +4.
+            *[seocho | recent] * 4,
+            # 해운대구 최근 4건, 이전 2건 → +2.
+            *[haeundae | recent] * 4,
+            *[haeundae | previous] * 2,
+            # 이름 없는 지역 최근 3건, 이전 1건 → +2. 해운대구와 동률이라 지역코드 순으로 뒤에 온다.
+            *[unnamed | recent] * 3,
+            unnamed | previous,
+            # 분당구 최근 2건, 이전 1건 → +1.
+            *[bundang | recent] * 2,
+            bundang | previous,
+            # 수지구 최근 1건, 이전 0건 → +1. 분당구와 동률이고 지역코드가 커서 6위로 빠진다.
+            suji | recent,
+            # 2026-11-05 기준 최근 구간: 강남구 1건(위 09-05) → -6, 서초구 4건 → 0, 송파구 2건 → +2, 해운대구 5건 → +1.
+            *[seocho | unreported] * 4,
+            *[songpa | unreported] * 2,
+            *[haeundae | unreported] * 5,
+        ]
+        # 전월세는 거래량에 넣지 않는다.
+        rent_rows = [RENT_ROW | {"sido_code": "11", "sigungu_code": "680"} | recent] * 10
+        async with (
+            seed_rows(session_factory, LegalDongCodeRawItem, VOLUME_SURGE_LEGAL_DONG_CODE_ROWS),
+            seed_rows(session_factory, SaleTransaction, sale_rows),
+            seed_rows(session_factory, RentTransaction, rent_rows),
+        ):
+            yield
+
+    async def test_returns_top_regions_by_count_increase(self, client: httpx.AsyncClient, seed: None) -> None:
+        """매매 건수 증가 폭 순으로 5개 지역을 주고, 동률이면 지역코드 순이다."""
+        app.dependency_overrides[get_today] = lambda: VOLUME_SURGE_BASE_DATE
+
+        response = await client.get(VOLUME_SURGE_REGIONS_URL)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "base_date": "2026-10-05",
+            "recent_start_date": "2026-08-05",
+            "recent_end_date": "2026-09-04",
+            "previous_start_date": "2026-07-05",
+            "previous_end_date": "2026-08-04",
+            "regions": [
+                {
+                    "region_code": "11680",
+                    "region_name": "서울특별시 강남구",
+                    "recent_count": 7,
+                    "previous_count": 2,
+                    "count_change": 5,
+                },
+                {
+                    "region_code": "11650",
+                    "region_name": "서울특별시 서초구",
+                    "recent_count": 4,
+                    "previous_count": 0,
+                    "count_change": 4,
+                },
+                {
+                    "region_code": "26350",
+                    "region_name": "부산광역시 해운대구",
+                    "recent_count": 4,
+                    "previous_count": 2,
+                    "count_change": 2,
+                },
+                {
+                    "region_code": "50999",
+                    "region_name": None,
+                    "recent_count": 3,
+                    "previous_count": 1,
+                    "count_change": 2,
+                },
+                {
+                    "region_code": "41135",
+                    "region_name": "경기도 성남시 분당구",
+                    "recent_count": 2,
+                    "previous_count": 1,
+                    "count_change": 1,
+                },
+            ],
+        }
+
+    async def test_counts_only_eligible_sales_in_periods(self, client: httpx.AsyncClient, seed: None) -> None:
+        """구간 경계일은 세고, 구간 밖 매매·해제된 매매·전월세는 세지 않는다."""
+        app.dependency_overrides[get_today] = lambda: VOLUME_SURGE_BASE_DATE
+
+        response = await client.get(VOLUME_SURGE_REGIONS_URL)
+
+        assert response.status_code == 200
+        gangnam = next(region for region in response.json()["regions"] if region["region_code"] == "11680")
+        assert (gangnam["recent_count"], gangnam["previous_count"]) == (7, 2)
+
+    async def test_excludes_regions_without_increase(self, client: httpx.AsyncClient, seed: None) -> None:
+        """건수가 줄었거나 그대로인 지역은 빠져 5개보다 적을 수 있다."""
+        app.dependency_overrides[get_today] = lambda: date(2026, 11, 5)
+
+        response = await client.get(VOLUME_SURGE_REGIONS_URL)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert (body["recent_start_date"], body["recent_end_date"]) == ("2026-09-05", "2026-10-04")
+        assert [(region["region_code"], region["count_change"]) for region in body["regions"]] == [
+            ("11710", 2),
+            ("26350", 1),
+        ]
+
+    async def test_returns_empty_list_when_no_increase(self, client: httpx.AsyncClient, seed: None) -> None:
+        """증가한 지역이 없으면 빈 목록이고, 월말 기준일의 구간은 각 달의 말일로 맞춰진다."""
+        app.dependency_overrides[get_today] = lambda: date(2028, 3, 31)
+
+        response = await client.get(VOLUME_SURGE_REGIONS_URL)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "base_date": "2028-03-31",
+            "recent_start_date": "2028-01-31",
+            "recent_end_date": "2028-02-28",
+            "previous_start_date": "2027-12-31",
+            "previous_end_date": "2028-01-30",
+            "regions": [],
+        }
