@@ -6,10 +6,12 @@
 - refresh_unit_state: 갱신 파이프라인이 끝내지 못한 단위 목록
 - user: 서비스 사용자 계정과 로그인 세션
 - complex: 실거래 갱신과 무관하게 유지되는 아파트·오피스텔 단지
+- favorite: 사용자가 즐겨찾기한 단지
 """
 
 from .base import Base
 from .complex import COMPLEX_INDEX_WHERE, COMPLEX_KEY_COLUMNS, COMPLEX_PROPERTY_TYPES, Complex
+from .favorite import FavoriteComplex
 from .load_progress import RawLoadProgress
 from .prop_transaction import (
     PropertyType,
@@ -35,6 +37,7 @@ __all__ = [
     "RTMS_KNOWN_FIELDS",
     "Base",
     "Complex",
+    "FavoriteComplex",
     "LegalDongCodeRawItem",
     "PropertyType",
     "RTMSRawItem",

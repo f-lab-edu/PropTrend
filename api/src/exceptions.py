@@ -23,3 +23,9 @@ class TransactionNotFoundError(PropTrendError):
     """요청한 id의 실거래가 없다."""
 
     status_code = status.HTTP_404_NOT_FOUND
+
+
+class ComplexNotFoundError(PropTrendError):
+    """요청한 id의 단지가 없다."""
+
+    status_code = status.HTTP_404_NOT_FOUND
