@@ -27,7 +27,8 @@ router = APIRouter()
     summary="매매 실거래 목록 조회",
     description=(
         "조회 조건에 맞는 매매 실거래 목록을 반환합니다.\n\n"
-        "- `property_type`, `sido_code`, `sigungu_code`, `deal_date`는 모두 필수입니다.\n"
+        "- `property_type`, `sido_code`, `sigungu_code`, `deal_ymd`는 모두 필수입니다.\n"
+        "- `deal_ymd`는 계약년월(`YYYYMM`)이며 그 달에 계약한 거래를 모두 반환합니다.\n"
         "- `address`는 법정동코드의 지역명, 읍면동, 지번 중 값이 있는 것만 이어 붙입니다.\n"
         "- `complex_id`는 거래가 속한 단지 id입니다. 아파트·오피스텔만 있으며, 단지 일련번호가 없는 아파트와 "
         "연립다세대·단독다가구는 `null`입니다.\n"
@@ -52,7 +53,8 @@ async def get_sale_prop_transactions(
     summary="전월세 실거래 목록 조회",
     description=(
         "조회 조건에 맞는 전월세 실거래 목록을 반환합니다.\n\n"
-        "- `property_type`, `sido_code`, `sigungu_code`, `deal_date`는 모두 필수입니다.\n"
+        "- `property_type`, `sido_code`, `sigungu_code`, `deal_ymd`는 모두 필수입니다.\n"
+        "- `deal_ymd`는 계약년월(`YYYYMM`)이며 그 달에 계약한 거래를 모두 반환합니다.\n"
         "- `address`는 법정동코드의 지역명, 읍면동, 지번 중 값이 있는 것만 이어 붙입니다.\n"
         "- `complex_id`는 거래가 속한 단지 id입니다. 아파트·오피스텔만 있으며, 단지 일련번호가 없는 아파트와 "
         "연립다세대·단독다가구는 `null`입니다.\n"

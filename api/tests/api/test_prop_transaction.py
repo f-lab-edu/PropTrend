@@ -86,7 +86,7 @@ async def seed_complexes(
 
 
 # 필수 조회 조건. 시드의 target 행과 맞는다.
-REQUIRED_PARAMS = {"property_type": "APT", "sido_code": "11", "sigungu_code": "680", "deal_date": "2026-02-27"}
+REQUIRED_PARAMS = {"property_type": "APT", "sido_code": "11", "sigungu_code": "680", "deal_ymd": "202602"}
 
 INVALID_PARAMS = [
     *(
@@ -104,8 +104,9 @@ INVALID_PARAMS = [
         REQUIRED_PARAMS | {"sigungu_code": "68"}, "sigungu_code", "string_pattern_mismatch", id="sigungu_code"
     ),
     pytest.param(
-        REQUIRED_PARAMS | {"deal_date": "2026-13-01"}, "deal_date", "date_from_datetime_parsing", id="deal_date"
+        REQUIRED_PARAMS | {"deal_ymd": "2026-02"}, "deal_ymd", "string_pattern_mismatch", id="deal_ymd_format"
     ),
+    pytest.param(REQUIRED_PARAMS | {"deal_ymd": "202613"}, "deal_ymd", "string_pattern_mismatch", id="deal_ymd_month"),
     pytest.param(REQUIRED_PARAMS | {"limit": 0}, "limit", "greater_than_equal", id="limit_too_small"),
     pytest.param(REQUIRED_PARAMS | {"limit": 1001}, "limit", "less_than_equal", id="limit_too_large"),
     pytest.param(REQUIRED_PARAMS | {"offset": -1}, "offset", "greater_than_equal", id="offset_negative"),
@@ -118,8 +119,10 @@ class TestGetSalePropTransactions:
     async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, SaleTransaction]]:
         rows = {
             "target": SALE_ROW,
-            "same_day": SALE_ROW | {"jibun": "123-5", "deal_amount": 1_200_000_000, "floor": 3},
-            "other_date": SALE_ROW | {"deal_date": date(2026, 2, 28)},
+            "same_month": SALE_ROW
+            | {"jibun": "123-5", "deal_amount": 1_200_000_000, "floor": 3, "deal_date": date(2026, 2, 1)},
+            "previous_month": SALE_ROW | {"deal_date": date(2026, 1, 31)},
+            "next_month": SALE_ROW | {"deal_date": date(2026, 3, 1)},
             "cancelled": SALE_ROW | {"jibun": "123-6", "cancel_deal_type": "O", "cancel_deal_date": date(2026, 3, 5)},
             "other_sigungu": SALE_ROW | {"sigungu_code": "650", "umd_name": "서초동", "jibun": "1-1"},
             "other_sido": SALE_ROW | {"sido_code": "26", "sigungu_code": "350", "umd_name": "우동", "jibun": "1-1"},
@@ -141,7 +144,7 @@ class TestGetSalePropTransactions:
     async def test_returns_transactions_matching_all_conditions(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
-        """유형·시도·시군구·계약일이 모두 맞는 매매만 지역명 붙은 주소와 함께 주고, 해제 거래는 해제일도 준다."""
+        """유형·시도·시군구·계약년월이 모두 맞는 매매만 지역명 붙은 주소와 함께 주고, 해제 거래는 해제일도 준다."""
         response = await client.get(SALES_URL, params=REQUIRED_PARAMS)
 
         assert response.status_code == 200
@@ -166,10 +169,10 @@ class TestGetSalePropTransactions:
                 "address": "서울특별시 강남구 역삼동 123-4",
             },
             {
-                "id": seed["same_day"].id,
+                "id": seed["same_month"].id,
                 "property_type": "APT",
                 "complex_id": complexes["apartment"].id,
-                "deal_date": "2026-02-27",
+                "deal_date": "2026-02-01",
                 "deal_amount": 1_200_000_000,
                 "dealing_type": "중개거래",
                 "cancel_deal_date": None,
@@ -209,7 +212,7 @@ class TestGetSalePropTransactions:
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
         """limit·offset만큼 잘라 id 오름차순으로 준다."""
-        ids = sorted(seed[name].id for name in ("target", "same_day", "cancelled"))
+        ids = sorted(seed[name].id for name in ("target", "same_month", "cancelled"))
         params = REQUIRED_PARAMS | {"limit": 1, "offset": 1}
 
         response = await client.get(SALES_URL, params=params)
@@ -250,8 +253,9 @@ class TestGetRentPropTransactions:
     async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, RentTransaction]]:
         rows = {
             "target": RENT_ROW,
-            "monthly": RENT_ROW | {"deposit": 50_000_000, "monthly_rent": 1_500_000},
-            "other_date": RENT_ROW | {"deal_date": date(2026, 2, 28)},
+            "monthly": RENT_ROW | {"deposit": 50_000_000, "monthly_rent": 1_500_000, "deal_date": date(2026, 2, 1)},
+            "previous_month": RENT_ROW | {"deal_date": date(2026, 1, 31)},
+            "next_month": RENT_ROW | {"deal_date": date(2026, 3, 1)},
             "other_sigungu": RENT_ROW | {"sigungu_code": "650", "umd_name": "서초동", "jibun": "1-1"},
             "other_sido": RENT_ROW | {"sido_code": "26", "sigungu_code": "350", "umd_name": "우동", "jibun": "1-1"},
             "officetel": RENT_ROW | {"property_type": PropertyType.OFFICETEL},
@@ -272,7 +276,7 @@ class TestGetRentPropTransactions:
     async def test_returns_transactions_matching_all_conditions(
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction], complexes: dict[str, Complex]
     ) -> None:
-        """유형·시도·시군구·계약일이 모두 맞는 전세·월세를 지역명을 붙인 주소와 함께 준다."""
+        """유형·시도·시군구·계약년월이 모두 맞는 전세·월세를 지역명을 붙인 주소와 함께 준다."""
         response = await client.get(RENTS_URL, params=REQUIRED_PARAMS)
 
         assert response.status_code == 200
@@ -298,7 +302,7 @@ class TestGetRentPropTransactions:
                 "id": seed["monthly"].id,
                 "property_type": "APT",
                 "complex_id": complexes["apartment"].id,
-                "deal_date": "2026-02-27",
+                "deal_date": "2026-02-01",
                 "deposit": 50_000_000,
                 "monthly_rent": 1_500_000,
                 "contract_term": "26.03~28.03",
