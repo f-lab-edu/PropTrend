@@ -1,11 +1,25 @@
 from datetime import date
 
-from sqlalchemy import func, select
+from sqlalchemy import Date, Interval, Numeric, cast, func, literal, select, union_all
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..model.prop_transaction import RentTransaction, SaleTransaction
-from ..schemas.market import DailySummaryResponse
-from .prop_transaction import build_sale_response_with_region_name, get_region_names
+from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction
+from ..schemas.market import DailySummaryResponse, PriceMover, PriceMoversResponse
+from ..schemas.prop_transaction import SalePriceTrendPoint
+from .prop_transaction import (
+    EMPTY_TREND_ON_NULL_KEY_TYPES,
+    PRICE_TREND_GROUP_COLUMNS,
+    build_sale_response_with_region_name,
+    get_region_names,
+)
+
+# 연립다세대·단독다가구는 단지 개념이 모호해 급등/급락 순위에서 뺀다.
+PRICE_MOVER_PROPERTY_TYPES = (PropertyType.APT, PropertyType.OFFICETEL)
+# 이 기간 안의 거래만 비교에 쓴다.
+PRICE_MOVER_LOOKBACK_YEARS = 10
+# 최근 거래가 이 기간 안에 있는 단지만 순위에 넣는다. 오래전 거래끼리 비교한 결과가 섞이지 않게 한다.
+PRICE_MOVER_RECENT_YEARS = 1
+PRICE_MOVER_LIMIT = 5
 
 
 async def get_daily_summary(session: AsyncSession, deal_date: date) -> DailySummaryResponse:
@@ -45,4 +59,100 @@ async def get_daily_summary(session: AsyncSession, deal_date: date) -> DailySumm
         highest_sale=None if highest is None else build_sale_response_with_region_name(highest, names),
         lowest_sale=None if lowest is None else build_sale_response_with_region_name(lowest, names),
         transaction_count=transaction_count,
+    )
+
+
+async def get_price_movers(session: AsyncSession, base_date: date) -> PriceMoversResponse:
+    """직전 거래 대비 최근 거래 금액 변동률이 가장 큰 단지와 가장 작은 단지를 조회한다."""
+    # 기준일이 2/29여도 깨지지 않도록 연 단위 경계는 PostgreSQL interval 연산으로 구한다.
+    base = literal(base_date, Date)
+    lookback_start = base - func.make_interval(PRICE_MOVER_LOOKBACK_YEARS, type_=Interval)
+    recent_start = base - func.make_interval(PRICE_MOVER_RECENT_YEARS, type_=Interval)
+
+    # 유형마다 단지를 묶는 컬럼이 달라 유형별로 윈도를 따로 계산해 합친다.
+    ranked_by_type = []
+    for property_type in PRICE_MOVER_PROPERTY_TYPES:
+        group_columns = [getattr(SaleTransaction, column) for column in PRICE_TREND_GROUP_COLUMNS[property_type]]
+        window = {
+            "partition_by": [SaleTransaction.sido_code, SaleTransaction.sigungu_code, *group_columns],
+            "order_by": [SaleTransaction.deal_date.desc(), SaleTransaction.id.desc()],
+        }
+        # 해제된 거래는 실제로 성사되지 않은 가격이라 비교에서 뺀다.
+        conditions = [
+            SaleTransaction.property_type == property_type,
+            SaleTransaction.deal_date >= lookback_start,
+            SaleTransaction.cancel_deal_type.is_distinct_from("O"),
+        ]
+        # 아파트는 묶음 컬럼이 NULL이면 같은 단지를 특정할 수 없어 뺀다. 오피스텔은 PARTITION BY가 NULL끼리 묶는다.
+        if property_type in EMPTY_TREND_ON_NULL_KEY_TYPES:
+            conditions += [column.is_not(None) for column in group_columns]
+        ranked_by_type.append(
+            select(
+                SaleTransaction.id,
+                SaleTransaction.deal_date,
+                SaleTransaction.deal_amount,
+                func.row_number().over(**window).label("rn"),
+                func.lead(SaleTransaction.id).over(**window).label("previous_id"),
+                func.lead(SaleTransaction.deal_date).over(**window).label("previous_deal_date"),
+                func.lead(SaleTransaction.deal_amount).over(**window).label("previous_deal_amount"),
+                func.lead(SaleTransaction.floor).over(**window).label("previous_floor"),
+            ).where(*conditions)
+        )
+    ranked = union_all(*ranked_by_type).subquery()
+
+    # 단지의 최근 거래 한 건에 직전 거래가 있으면 거래가 2건 이상인 단지다.
+    change_rate = func.round(
+        cast(ranked.c.deal_amount - ranked.c.previous_deal_amount, Numeric) * 100 / ranked.c.previous_deal_amount, 2
+    ).label("change_rate")
+    candidates = (
+        select(*ranked.c, change_rate)
+        .where(ranked.c.rn == 1, ranked.c.previous_id.is_not(None), ranked.c.deal_date >= recent_start)
+        .cte("candidates")
+    )
+    # 두 순위를 한 문장으로 뽑아 비싼 윈도 계산을 한 번만 한다. 변동률이 같으면 id가 작은 거래를 먼저 둔다.
+    surge = (
+        select(candidates)
+        .where(candidates.c.change_rate > 0)
+        .order_by(candidates.c.change_rate.desc(), candidates.c.id)
+        .limit(PRICE_MOVER_LIMIT)
+    )
+    plunge = (
+        select(candidates)
+        .where(candidates.c.change_rate < 0)
+        .order_by(candidates.c.change_rate, candidates.c.id)
+        .limit(PRICE_MOVER_LIMIT)
+    )
+    rows = (await session.execute(union_all(surge, plunge))).all()
+
+    latest_sales = {
+        transaction.id: transaction
+        for transaction in await session.scalars(
+            select(SaleTransaction).where(SaleTransaction.id.in_([row.id for row in rows]))
+        )
+    }
+    names = await get_region_names(session)
+    movers = [
+        PriceMover(
+            change_rate=row.change_rate,
+            latest_sale=build_sale_response_with_region_name(latest_sales[row.id], names),
+            previous_sale=SalePriceTrendPoint(
+                id=row.previous_id,
+                deal_date=row.previous_deal_date,
+                deal_amount=row.previous_deal_amount,
+                floor=row.previous_floor,
+            ),
+        )
+        for row in rows
+    ]
+    # UNION ALL은 결과 순서를 보장하지 않으므로 순위 순서로 다시 정렬한다.
+    return PriceMoversResponse(
+        base_date=base_date,
+        surge=sorted(
+            (mover for mover in movers if mover.change_rate > 0),
+            key=lambda mover: (-mover.change_rate, mover.latest_sale.id),
+        ),
+        plunge=sorted(
+            (mover for mover in movers if mover.change_rate < 0),
+            key=lambda mover: (mover.change_rate, mover.latest_sale.id),
+        ),
     )

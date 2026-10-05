@@ -5,8 +5,8 @@ from fastapi import APIRouter, Depends, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dependencies import get_session, get_today
-from ..schemas.market import DailySummaryResponse
-from ..services.market import get_daily_summary
+from ..schemas.market import DailySummaryResponse, PriceMoversResponse
+from ..services.market import get_daily_summary, get_price_movers
 
 router = APIRouter()
 
@@ -33,3 +33,31 @@ async def get_market_daily_summary(
     """직전일 실거래 요약을 조회한다."""
     async with session.begin():
         return await get_daily_summary(session, today - timedelta(days=1))
+
+
+@router.get(
+    "/price-movers",
+    status_code=status.HTTP_200_OK,
+    summary="거래액 급등/급락 단지 TOP 5",
+    description=(
+        "단지별로 최근 매매와 바로 앞 매매의 금액 변동률을 구해 상승률 상위 5개와 하락률 상위 5개를 반환합니다.\n\n"
+        "- 기준일은 호출일(KST)이며, 계약일이 기준일로부터 10년 이내인 매매만 비교에 씁니다.\n"
+        "- 아파트와 오피스텔만 다루고, 두 유형을 합쳐 한 순위로 매깁니다. 해제된 매매는 뺍니다.\n"
+        "- 단지는 전용면적별로 나눠 비교합니다. 아파트는 단지 일련번호 + 전용면적, 오피스텔은 법정동·지번·건물명·"
+        "건축년도 + 전용면적으로 묶습니다.\n"
+        "- 단지 일련번호가 없는 아파트 매매(상세 자료로 재수집되기 전 과거 거래)는 뺍니다.\n"
+        "- 10년 이내 거래가 2건 이상이고, 최근 거래의 계약일이 기준일로부터 1년 이내인 단지만 순위에 넣습니다.\n"
+        "- `change_rate`는 `(최근 - 직전) / 직전 × 100`을 소수 둘째 자리까지 반올림한 값(%)입니다.\n"
+        "- `surge`는 변동률이 0보다 큰 단지, `plunge`는 0보다 작은 단지만 담으며 5개보다 적을 수 있습니다.\n"
+        "- 변동률이 같으면 최근 거래의 `id`가 작은 단지가 먼저 옵니다.\n"
+        "- 요청마다 전국 거래를 집계하므로 응답에 수 초가 걸릴 수 있습니다.\n"
+        "- `deal_amount`의 단위는 원입니다."
+    ),
+)
+async def get_market_price_movers(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    today: Annotated[date, Depends(get_today)],
+) -> PriceMoversResponse:
+    """거래액 급등/급락 단지 TOP 5를 조회한다."""
+    async with session.begin():
+        return await get_price_movers(session, today)
