@@ -13,7 +13,7 @@ from typing import Any, ClassVar
 from sqlalchemy import select
 
 from ..db import session_scope
-from ..model import LegalDongCodeRawItem, PropertyType, UnitStatus
+from ..model import COMPLEX_PROPERTY_TYPES, LegalDongCodeRawItem, PropertyType, UnitStatus
 from .cleaner import (
     LegalDongCodeRawItemCleaner,
     RentTransactionCleaner,
@@ -29,6 +29,7 @@ from .collector import (
 )
 from .context import unit_context
 from .loader import (
+    ComplexLoader,
     LegalDongCodeRawItemLoader,
     RentTransactionLoader,
     RTMSRawItemLoader,
@@ -248,6 +249,9 @@ async def process_unit(
 
             deleted = await spec.cleaner(session).clean(spec.property_type, deal_ymd, lawd_cd)
             loaded = await spec.loader(session).load(payload)
+            # 실거래와 같은 트랜잭션이라 정제가 롤백되면 이번 단위로 생긴 단지도 함께 되돌아간다.
+            if spec.property_type in COMPLEX_PROPERTY_TYPES:
+                await ComplexLoader(session).load(spec.property_type, payload)
             # 성공 기록은 행을 지우는 것이다. T2가 롤백되면 이 삭제도 함께 되돌아가
             # COLLECTED가 그대로 남으므로, 실패를 따로 적을 필요가 없다.
             await RefreshUnitStateStore(session).clear(spec.api_id, lawd_cd, deal_ymd)
