@@ -51,7 +51,7 @@ class SalePropTransactionResponse(AddressResponse):
     building_name: str | None = None  # 아파트, 연립다세대, 오피스텔
     apartment_dong: str | None = None  # 아파트
     floor: int | None = None  # 아파트, 연립다세대, 오피스텔
-    build_year: int | None = None  # 아파트, 연립다세대
+    build_year: int | None = None  # 모든 유형 (일부 행은 비어 있음)
     exclusive_use_area: float | None = None  # 아파트, 연립다세대, 오피스텔
     total_floor_area: float | None = None  # 단독다가구
     plottage_area: float | None = None  # 단독다가구
@@ -75,8 +75,8 @@ class RentPropTransactionResponse(AddressResponse):
     # 유형별
     house_type: str | None = None  # 단독다가구, 연립다세대
     building_name: str | None = None  # 아파트, 연립다세대, 오피스텔
-    floor: int | None = None  # 아파트, 오피스텔
-    build_year: int | None = None  # 아파트, 연립다세대
+    floor: int | None = None  # 아파트, 연립다세대, 오피스텔
+    build_year: int | None = None  # 모든 유형 (일부 행은 비어 있음)
     exclusive_use_area: float | None = None  # 아파트, 연립다세대, 오피스텔
     total_floor_area: float | None = None  # 단독다가구
 
