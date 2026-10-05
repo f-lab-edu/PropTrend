@@ -1,4 +1,4 @@
-from datetime import date, timedelta
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, status
@@ -14,10 +14,12 @@ router = APIRouter()
 @router.get(
     "/daily-summary",
     status_code=status.HTTP_200_OK,
-    summary="직전일 실거래 요약",
+    summary="1개월 전 일자 실거래 요약",
     description=(
-        "호출일(KST) 전날을 계약일로 하는 실거래의 매매 최고가·최저가 거래와 거래건수를 반환합니다.\n\n"
-        "- 실거래는 계약 후 30일 안에 신고되므로 현재까지 신고된 거래 기준이며, 이후 값이 늘어날 수 있습니다.\n"
+        "호출일(KST)로부터 1개월 전 날짜를 계약일로 하는 실거래의 매매 최고가·최저가 거래와 거래건수를 반환합니다.\n\n"
+        "- 실거래는 계약 후 30일 안에 신고되므로 신고 기한이 지나 대부분 신고된 날짜를 기준일로 삼습니다.\n"
+        "- 전월에 같은 날이 없으면 전월 말일이 기준일입니다(예: 10/31 호출 시 9/30).\n"
+        "- `deal_date`는 집계 기준 계약일입니다.\n"
         "- `highest_sale`, `lowest_sale`은 부동산 유형 구분 없이 매매 중에서 고릅니다.\n"
         "- 금액이 같은 거래가 여럿이면 `id`가 작은 거래를 줍니다.\n"
         "- 기준일에 매매가 없으면 `highest_sale`, `lowest_sale`은 `null`입니다.\n"
@@ -31,9 +33,9 @@ async def get_market_daily_summary(
     session: Annotated[AsyncSession, Depends(get_session)],
     today: Annotated[date, Depends(get_today)],
 ) -> DailySummaryResponse:
-    """직전일 실거래 요약을 조회한다."""
+    """1개월 전 일자 실거래 요약을 조회한다."""
     async with session.begin():
-        return await get_daily_summary(session, today - timedelta(days=1))
+        return await get_daily_summary(session, today)
 
 
 @router.get(

@@ -63,7 +63,7 @@ class TestGetDailySummary:
             "cancelled_high": SALE_ROW | {"deal_amount": 9_000_000_000, "cancel_deal_type": "O"},
             "cancelled_low": SALE_ROW | {"deal_amount": 1_000_000, "cancel_deal_type": "O"},
             "day_before": SALE_ROW | {"deal_date": date(2026, 10, 3), "deal_amount": 8_000_000_000},
-            "today": SALE_ROW | {"deal_date": date(2026, 10, 5), "deal_amount": 2_000_000},
+            "day_after": SALE_ROW | {"deal_date": date(2026, 10, 5), "deal_amount": 2_000_000},
         }
         rent_rows = [
             RENT_ROW,
@@ -87,11 +87,11 @@ class TestGetDailySummary:
         async with seed_complexes(session_factory, {"apartment": APARTMENT_COMPLEX_ROW}) as complexes:
             yield complexes
 
-    async def test_returns_summary_of_previous_day(
+    async def test_returns_summary_of_month_ago(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
-        """호출일 전날 계약된 매매의 최고가·최저가 거래와 매매·전월세 합계 건수를 해제 거래를 빼고 준다."""
-        app.dependency_overrides[get_today] = lambda: date(2026, 10, 5)
+        """호출일 1개월 전 계약된 매매의 최고가·최저가 거래와 매매·전월세 합계 건수를 해제 거래를 빼고 준다."""
+        app.dependency_overrides[get_today] = lambda: date(2026, 11, 4)
 
         response = await client.get(DAILY_SUMMARY_URL)
 
@@ -140,11 +140,11 @@ class TestGetDailySummary:
             "transaction_count": 6,
         }
 
-    async def test_returns_null_sales_when_no_sale_on_previous_day(
+    async def test_returns_null_sales_when_no_sale_on_month_ago(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
-        """전날 매매가 없으면 최고가·최저가는 null이고 건수는 전월세만 센다."""
-        app.dependency_overrides[get_today] = lambda: date(2026, 10, 3)
+        """1개월 전 날짜에 매매가 없으면 최고가·최저가는 null이고 건수는 전월세만 센다."""
+        app.dependency_overrides[get_today] = lambda: date(2026, 11, 2)
 
         response = await client.get(DAILY_SUMMARY_URL)
 
@@ -156,17 +156,31 @@ class TestGetDailySummary:
             "transaction_count": 2,
         }
 
-    async def test_returns_zero_count_when_no_transaction_on_previous_day(
+    async def test_returns_zero_count_when_no_transaction_on_month_ago(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
-        """전날 거래가 하나도 없으면 최고가·최저가는 null이고 건수는 0이다."""
-        app.dependency_overrides[get_today] = lambda: date(2026, 10, 2)
+        """1개월 전 날짜에 거래가 하나도 없으면 최고가·최저가는 null이고 건수는 0이다."""
+        app.dependency_overrides[get_today] = lambda: date(2026, 11, 1)
 
         response = await client.get(DAILY_SUMMARY_URL)
 
         assert response.status_code == 200
         assert response.json() == {
             "deal_date": "2026-10-01",
+            "highest_sale": None,
+            "lowest_sale": None,
+            "transaction_count": 0,
+        }
+
+    async def test_clamps_deal_date_to_month_end(self, client: httpx.AsyncClient) -> None:
+        """전월에 같은 날이 없으면 전월 말일을 기준일로 삼는다."""
+        app.dependency_overrides[get_today] = lambda: date(2026, 10, 31)
+
+        response = await client.get(DAILY_SUMMARY_URL)
+
+        assert response.status_code == 200
+        assert response.json() == {
+            "deal_date": "2026-09-30",
             "highest_sale": None,
             "lowest_sale": None,
             "transaction_count": 0,

@@ -5,7 +5,7 @@ from .prop_transaction import SalePriceTrendPoint, SalePropTransactionResponse
 
 
 class DailySummaryResponse(PropTrendCoreModel):
-    """직전일 실거래 요약 응답."""
+    """1개월 전 일자 실거래 요약 응답."""
 
     # 집계 기준 계약일.
     deal_date: date

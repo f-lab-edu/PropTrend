@@ -27,13 +27,17 @@ PRICE_MOVER_LOOKBACK_YEARS = 10
 # 최근 거래가 이 기간 안에 있는 단지만 순위에 넣는다. 오래전 거래끼리 비교한 결과가 섞이지 않게 한다.
 PRICE_MOVER_RECENT_YEARS = 1
 PRICE_MOVER_LIMIT = 5
-# 실거래는 계약 후 30일 안에 신고되므로 신고 기한이 지난 구간끼리 비교하도록 이만큼 늦춘다.
-VOLUME_SURGE_REPORT_DELAY_MONTHS = 1
+# 실거래는 계약 후 30일 안에 신고되므로 신고 기한이 지난 날짜만 집계하도록 이만큼 늦춘다.
+REPORT_DELAY_MONTHS = 1
 VOLUME_SURGE_LIMIT = 5
 
 
-async def get_daily_summary(session: AsyncSession, deal_date: date) -> DailySummaryResponse:
-    """계약일 하루의 매매 최고가·최저가 거래와 전체 거래건수를 조회한다."""
+async def get_daily_summary(session: AsyncSession, base_date: date) -> DailySummaryResponse:
+    """기준일로부터 신고 기한만큼 앞선 계약일 하루의 매매 최고가·최저가 거래와 전체 거래건수를 조회한다."""
+    # 기준일이 월말이어도 깨지지 않도록 PostgreSQL interval 연산으로 구한다(10/31의 1개월 전은 9/30).
+    deal_date = await session.scalar(
+        select(cast(literal(base_date, Date) - func.make_interval(0, REPORT_DELAY_MONTHS, type_=Interval), Date))
+    )
     # 해제된 거래는 실제로 성사되지 않은 가격이라 최고가·최저가와 건수에서 모두 뺀다.
     sale_conditions = [
         SaleTransaction.deal_date == deal_date,
@@ -175,7 +179,7 @@ async def get_volume_surge_regions(session: AsyncSession, base_date: date) -> Vo
     # 기준일이 월말이어도 깨지지 않도록 월 단위 경계는 PostgreSQL interval 연산으로 구한다.
     # 경계는 응답에도 실으므로 집계 전에 날짜로 받아 둔다. 최근 구간의 끝부터 1개월씩 거슬러 올라간다.
     base = literal(base_date, Date)
-    months_before = [VOLUME_SURGE_REPORT_DELAY_MONTHS + offset for offset in range(3)]
+    months_before = [REPORT_DELAY_MONTHS + offset for offset in range(3)]
     boundaries = [cast(base - func.make_interval(0, months, type_=Interval), Date) for months in months_before]
     recent_end, recent_start, previous_start = (await session.execute(select(*boundaries))).one()
 
