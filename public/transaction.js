@@ -1,3 +1,4 @@
+import { fetchMe, readErrorMessage } from "/auth.js";
 import {
   COLUMNS,
   DEAL_DATE,
@@ -242,6 +243,64 @@ function renderTrend(dealType, body) {
   update();
 }
 
+// 즐겨찾기 추가 버튼. 제거는 내 정보 페이지에서 하므로 이미 즐겨찾기한 단지면 채운 별로 두고 끈다.
+async function renderFavorite(complexId) {
+  // 연립다세대·단독다가구나 단지를 찾지 못한 거래는 즐겨찾기할 단지가 없다.
+  if (complexId === null) return;
+  const button = document.getElementById("favorite");
+  const favoriteMessage = document.getElementById("favorite-message");
+
+  function update(favorite) {
+    button.disabled = favorite;
+    button.title = favorite ? "즐겨찾기한 단지입니다" : "즐겨찾기 추가";
+    button.setAttribute("aria-label", button.title);
+    button.querySelector("svg").setAttribute("fill", favorite ? "currentColor" : "none");
+    button.classList.toggle("text-amber-400", favorite);
+    button.classList.toggle("text-slate-400", !favorite);
+  }
+
+  // 로그인했으면 내 즐겨찾기 목록에서 이 단지를 찾는다. 확인에 실패해도 추가는 멱등이라 빈 별로 둔다.
+  let favorite = false;
+  try {
+    if (await fetchMe()) {
+      const response = await fetch("/api/favorites/complexes");
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      favorite = (await response.json()).some((item) => item.complex_id === complexId);
+    }
+  } catch (error) {
+    console.error(error);
+  }
+  update(favorite);
+  button.classList.remove("hidden");
+
+  button.addEventListener("click", async () => {
+    button.disabled = true;
+    favoriteMessage.classList.add("hidden");
+    try {
+      const response = await fetch("/api/favorites/complexes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ complex_id: complexId }),
+      });
+      // 로그인하지 않았거나 세션이 끝났으면 로그인한 뒤 이 페이지로 돌아온다.
+      if (response.status === 401) {
+        location.href = `/login.html?${new URLSearchParams({ next: location.pathname + location.search })}`;
+        return;
+      }
+      if (!response.ok) {
+        showMessage(favoriteMessage, await readErrorMessage(response));
+        button.disabled = false;
+        return;
+      }
+      update(true);
+    } catch (error) {
+      console.error(error);
+      showMessage(favoriteMessage, "즐겨찾기에 추가하지 못했습니다. 잠시 후 다시 시도하세요.");
+      button.disabled = false;
+    }
+  });
+}
+
 async function main() {
   // 목록에서 들어왔으면 조건과 페이지가 담긴 목록 URL로 돌아가고, 링크로 바로 들어왔으면 검색 페이지로 간다.
   document.getElementById("back").addEventListener("click", () => {
@@ -265,6 +324,7 @@ async function main() {
       return;
     }
     renderSummary(dealType, body.base_transaction);
+    renderFavorite(body.base_transaction.complex_id);
     document.getElementById("detail").classList.remove("hidden");
     renderTrend(dealType, body);
   } catch (error) {
