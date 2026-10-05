@@ -1,17 +1,29 @@
+from datetime import datetime
+
 from pydantic import Field
 
+from ..model.prop_transaction import PropertyType
 from . import PropTrendCoreModel
+from .prop_transaction import AddressResponse
 
 
-class FavoriteComplexToggleRequest(PropTrendCoreModel):
-    """단지 즐겨찾기 토글 요청."""
+class FavoriteComplexAddRequest(PropTrendCoreModel):
+    """단지 즐겨찾기 추가 요청."""
 
     complex_id: int = Field(ge=1)
 
 
-class FavoriteComplexToggleResponse(PropTrendCoreModel):
-    """단지 즐겨찾기 토글 결과."""
+class FavoriteComplexAddResponse(PropTrendCoreModel):
+    """단지 즐겨찾기 추가 결과."""
 
     complex_id: int
-    # 토글한 뒤의 상태. true면 이번 요청으로 추가됐고 false면 제거됐다.
-    is_favorite: bool
+
+
+class FavoriteComplexResponse(AddressResponse):
+    """즐겨찾기한 단지."""
+
+    complex_id: int
+    property_type: PropertyType
+    building_name: str | None
+    build_year: int | None
+    favorited_at: datetime
