@@ -1,6 +1,7 @@
 """실거래 목록 조회 API 테스트."""
 
 from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import date
 from typing import Any
 
@@ -9,7 +10,7 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from src.model import LegalDongCodeRawItem, PropertyType, RentTransaction, SaleTransaction
+from src.model import Complex, LegalDongCodeRawItem, PropertyType, RentTransaction, SaleTransaction
 
 from .conftest import seed_rows
 
@@ -62,6 +63,28 @@ RENT_ROW = {
     "build_year": 2005,
 }
 
+# SALE_ROW·RENT_ROW가 속한 아파트 단지. 스위트는 이 행에서 필요한 값만 바꿔 단지 시드를 만든다.
+APARTMENT_COMPLEX_ROW = {
+    "property_type": PropertyType.APT,
+    "sido_code": "11",
+    "sigungu_code": "680",
+    "umd_name": "역삼동",
+    "jibun": "123-4",
+    "building_name": "역삼래미안",
+    "build_year": 2005,
+    "apartment_serial_number": "11680-1001",
+}
+
+
+@asynccontextmanager
+async def seed_complexes(
+    session_factory: async_sessionmaker[AsyncSession], rows: dict[str, dict[str, Any]]
+) -> AsyncIterator[dict[str, Complex]]:
+    """이름 붙인 단지 시드를 만들어 이름으로 돌려준다."""
+    async with seed_rows(session_factory, Complex, list(rows.values())) as complexes:
+        yield dict(zip(rows, complexes, strict=True))
+
+
 # 필수 조회 조건. 시드의 target 행과 맞는다.
 REQUIRED_PARAMS = {"property_type": "APT", "sido_code": "11", "sigungu_code": "680", "deal_date": "2026-02-27"}
 
@@ -108,8 +131,14 @@ class TestGetSalePropTransactions:
         ):
             yield dict(zip(rows, sales, strict=True))
 
+    @pytest_asyncio.fixture(scope="class", loop_scope="session")
+    @classmethod
+    async def complexes(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, Complex]]:
+        async with seed_complexes(session_factory, {"apartment": APARTMENT_COMPLEX_ROW}) as complexes:
+            yield complexes
+
     async def test_returns_transactions_matching_all_conditions(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
+        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
         """유형·시도·시군구·계약일이 모두 맞는 매매만 지역명을 붙인 주소와 함께 준다."""
         response = await client.get(SALES_URL, params=REQUIRED_PARAMS)
@@ -119,6 +148,7 @@ class TestGetSalePropTransactions:
             {
                 "id": seed["target"].id,
                 "property_type": "APT",
+                "complex_id": complexes["apartment"].id,
                 "deal_date": "2026-02-27",
                 "deal_amount": 1_500_000_000,
                 "dealing_type": "중개거래",
@@ -136,6 +166,7 @@ class TestGetSalePropTransactions:
             {
                 "id": seed["same_day"].id,
                 "property_type": "APT",
+                "complex_id": complexes["apartment"].id,
                 "deal_date": "2026-02-27",
                 "deal_amount": 1_200_000_000,
                 "dealing_type": "중개거래",
@@ -210,8 +241,14 @@ class TestGetRentPropTransactions:
         ):
             yield dict(zip(rows, rents, strict=True))
 
+    @pytest_asyncio.fixture(scope="class", loop_scope="session")
+    @classmethod
+    async def complexes(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, Complex]]:
+        async with seed_complexes(session_factory, {"apartment": APARTMENT_COMPLEX_ROW}) as complexes:
+            yield complexes
+
     async def test_returns_transactions_matching_all_conditions(
-        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
+        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction], complexes: dict[str, Complex]
     ) -> None:
         """유형·시도·시군구·계약일이 모두 맞는 전세·월세를 지역명을 붙인 주소와 함께 준다."""
         response = await client.get(RENTS_URL, params=REQUIRED_PARAMS)
@@ -221,6 +258,7 @@ class TestGetRentPropTransactions:
             {
                 "id": seed["target"].id,
                 "property_type": "APT",
+                "complex_id": complexes["apartment"].id,
                 "deal_date": "2026-02-27",
                 "deposit": 800_000_000,
                 "monthly_rent": 0,
@@ -237,6 +275,7 @@ class TestGetRentPropTransactions:
             {
                 "id": seed["monthly"].id,
                 "property_type": "APT",
+                "complex_id": complexes["apartment"].id,
                 "deal_date": "2026-02-27",
                 "deposit": 50_000_000,
                 "monthly_rent": 1_500_000,
@@ -309,6 +348,26 @@ OFFICETEL_OVERRIDES = {
     "exclusive_use_area": 30.12,
     "build_year": 2018,
 }
+# 상세 조회 스위트의 단지 시드. 건물명이 없는 오피스텔로 NULL이 섞인 단지 키도 이어지는지 본다.
+OFFICETEL_COMPLEX_ROW = APARTMENT_COMPLEX_ROW | {
+    key: value for key, value in OFFICETEL_OVERRIDES.items() if key != "exclusive_use_area"
+}
+DETAIL_COMPLEX_ROWS = {
+    "apartment": APARTMENT_COMPLEX_ROW,
+    "officetel": OFFICETEL_COMPLEX_ROW,
+    "officetel_no_name": OFFICETEL_COMPLEX_ROW | {"building_name": None},
+}
+
+# 단지가 있는 거래와 없는 거래. 기대값이 None이면 complex_id가 null이다.
+COMPLEX_LINKS = [
+    pytest.param("officetel", "officetel", id="officetel"),
+    pytest.param("officetel_no_name", "officetel_no_name", id="officetel_null_key"),
+    pytest.param("officetel_rebuilt", None, id="officetel_without_complex"),
+    pytest.param("missing_serial_number", None, id="apartment_without_serial_number"),
+    pytest.param("row_house", None, id="row_house"),
+    pytest.param("single_multi", None, id="single_multi"),
+]
+
 SINGLE_MULTI_OVERRIDES = {
     "property_type": PropertyType.SINGLE_MULTI,
     "house_type": "다가구",
@@ -350,6 +409,7 @@ class TestGetSalePropTransactionDetail:
             "officetel_earlier": officetel | {"deal_date": date(2025, 4, 1), "deal_amount": 300_000_000, "floor": 3},
             "officetel_rebuilt": officetel | {"build_year": 1995, "deal_date": date(2012, 5, 1)},
             "officetel_other_area": officetel | {"exclusive_use_area": 30.05},
+            "officetel_no_name": officetel | {"building_name": None},
             "single_multi": SALE_ROW
             | SINGLE_MULTI_OVERRIDES
             | {"jibun": "1**", "apartment_dong": None, "build_year": 1990, "plottage_area": 150.0},
@@ -360,8 +420,30 @@ class TestGetSalePropTransactionDetail:
         ):
             yield dict(zip(rows, sales, strict=True))
 
+    @pytest_asyncio.fixture(scope="class", loop_scope="session")
+    @classmethod
+    async def complexes(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, Complex]]:
+        async with seed_complexes(session_factory, DETAIL_COMPLEX_ROWS) as complexes:
+            yield complexes
+
+    @pytest.mark.parametrize(("key", "complex_key"), COMPLEX_LINKS)
+    async def test_links_complex_by_complex_key(
+        self,
+        client: httpx.AsyncClient,
+        seed: dict[str, SaleTransaction],
+        complexes: dict[str, Complex],
+        key: str,
+        complex_key: str | None,
+    ) -> None:
+        """아파트는 단지 일련번호, 오피스텔은 NULL을 포함한 단지 키로 단지를 찾고, 단지가 없으면 null을 준다."""
+        response = await client.get(f"{SALES_URL}/{seed[key].id}")
+
+        assert response.status_code == 200
+        expected = None if complex_key is None else complexes[complex_key].id
+        assert response.json()["base_transaction"]["complex_id"] == expected
+
     async def test_returns_apartment_trend_of_same_serial_number_and_area(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
+        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
         """아파트는 단지명이 바뀌어도 같은 단지 일련번호·전용면적의 해제되지 않은 거래를 계약일 순으로 담는다."""
         response = await client.get(f"{SALES_URL}/{seed['target'].id}")
@@ -371,6 +453,7 @@ class TestGetSalePropTransactionDetail:
             "base_transaction": {
                 "id": seed["target"].id,
                 "property_type": "APT",
+                "complex_id": complexes["apartment"].id,
                 "deal_date": "2026-02-27",
                 "deal_amount": 1_500_000_000,
                 "dealing_type": "중개거래",
@@ -500,6 +583,7 @@ class TestGetRentPropTransactionDetail:
             "officetel_earlier": officetel | {"deal_date": date(2025, 4, 1), "deposit": 250_000_000, "floor": 3},
             "officetel_rebuilt": officetel | {"build_year": 1995, "deal_date": date(2012, 5, 1)},
             "officetel_other_area": officetel | {"exclusive_use_area": 30.05},
+            "officetel_no_name": officetel | {"building_name": None},
             "single_multi": RENT_ROW | SINGLE_MULTI_OVERRIDES | {"build_year": 1991},
         }
         async with (
@@ -508,8 +592,30 @@ class TestGetRentPropTransactionDetail:
         ):
             yield dict(zip(rows, rents, strict=True))
 
+    @pytest_asyncio.fixture(scope="class", loop_scope="session")
+    @classmethod
+    async def complexes(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, Complex]]:
+        async with seed_complexes(session_factory, DETAIL_COMPLEX_ROWS) as complexes:
+            yield complexes
+
+    @pytest.mark.parametrize(("key", "complex_key"), COMPLEX_LINKS)
+    async def test_links_complex_by_complex_key(
+        self,
+        client: httpx.AsyncClient,
+        seed: dict[str, RentTransaction],
+        complexes: dict[str, Complex],
+        key: str,
+        complex_key: str | None,
+    ) -> None:
+        """아파트는 단지 일련번호, 오피스텔은 NULL을 포함한 단지 키로 단지를 찾고, 단지가 없으면 null을 준다."""
+        response = await client.get(f"{RENTS_URL}/{seed[key].id}")
+
+        assert response.status_code == 200
+        expected = None if complex_key is None else complexes[complex_key].id
+        assert response.json()["base_transaction"]["complex_id"] == expected
+
     async def test_returns_apartment_trend_split_into_jeonse_and_monthly_rent(
-        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
+        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction], complexes: dict[str, Complex]
     ) -> None:
         """아파트는 단지명이 바뀌어도 같은 단지 일련번호·전용면적의 거래를 전세와 월세로 나눠 계약일 순으로 담는다."""
         response = await client.get(f"{RENTS_URL}/{seed['target'].id}")
@@ -519,6 +625,7 @@ class TestGetRentPropTransactionDetail:
             "base_transaction": {
                 "id": seed["target"].id,
                 "property_type": "APT",
+                "complex_id": complexes["apartment"].id,
                 "deal_date": "2026-02-27",
                 "deposit": 800_000_000,
                 "monthly_rent": 0,

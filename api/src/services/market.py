@@ -15,7 +15,8 @@ from ..schemas.prop_transaction import SalePriceTrendPoint
 from .prop_transaction import (
     EMPTY_TREND_ON_NULL_KEY_TYPES,
     PRICE_TREND_GROUP_COLUMNS,
-    build_sale_response_with_region_name,
+    build_sale_response,
+    get_complex_ids,
     get_region_names,
 )
 
@@ -63,10 +64,11 @@ async def get_daily_summary(session: AsyncSession, deal_date: date) -> DailySumm
     transaction_count = await session.scalar(select(sale_count + rent_count))
 
     names = await get_region_names(session)
+    complex_ids = await get_complex_ids(session, [sale for sale in (highest, lowest) if sale is not None])
     return DailySummaryResponse(
         deal_date=deal_date,
-        highest_sale=None if highest is None else build_sale_response_with_region_name(highest, names),
-        lowest_sale=None if lowest is None else build_sale_response_with_region_name(lowest, names),
+        highest_sale=None if highest is None else build_sale_response(highest, names, complex_ids),
+        lowest_sale=None if lowest is None else build_sale_response(lowest, names, complex_ids),
         transaction_count=transaction_count,
     )
 
@@ -140,10 +142,11 @@ async def get_price_movers(session: AsyncSession, base_date: date) -> PriceMover
         )
     }
     names = await get_region_names(session)
+    complex_ids = await get_complex_ids(session, list(latest_sales.values()))
     movers = [
         PriceMover(
             change_rate=row.change_rate,
-            latest_sale=build_sale_response_with_region_name(latest_sales[row.id], names),
+            latest_sale=build_sale_response(latest_sales[row.id], names, complex_ids),
             previous_sale=SalePriceTrendPoint(
                 id=row.previous_id,
                 deal_date=row.previous_deal_date,

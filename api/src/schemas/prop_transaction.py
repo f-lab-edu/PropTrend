@@ -40,6 +40,8 @@ class SalePropTransactionResponse(AddressResponse):
     # 모든 유형 공통
     id: int
     property_type: PropertyType
+    # 거래가 속한 단지. 서비스가 단지 키로 찾아 채운다. 단지가 없는 거래는 null.
+    complex_id: int | None = None
     deal_date: date
     deal_amount: int
     dealing_type: str | None
@@ -62,6 +64,8 @@ class RentPropTransactionResponse(AddressResponse):
     # 모든 유형 공통
     id: int
     property_type: PropertyType
+    # 거래가 속한 단지. 서비스가 단지 키로 찾아 채운다. 단지가 없는 거래는 null.
+    complex_id: int | None = None
     deal_date: date
     deposit: int
     monthly_rent: int

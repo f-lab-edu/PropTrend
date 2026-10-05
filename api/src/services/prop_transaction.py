@@ -1,10 +1,12 @@
 import time
+from collections.abc import Sequence
 
-from sqlalchemy import select
+from sqlalchemy import select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..exceptions import TransactionNotFoundError
-from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction
+from ..model.complex import COMPLEX_KEY_COLUMNS, COMPLEX_PROPERTY_TYPES, Complex
+from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction, TransactionMixin
 from ..model.raw import LegalDongCodeRawItem
 from ..schemas.prop_transaction import (
     PropTransactionQuery,
@@ -58,21 +60,54 @@ async def get_region_names(session: AsyncSession) -> dict[tuple[str, str], str]:
     return names
 
 
-def build_sale_response_with_region_name(
-    transaction: SaleTransaction, names: dict[tuple[str, str], str]
+async def get_complex_ids(session: AsyncSession, transactions: Sequence[TransactionMixin]) -> dict[int, int]:
+    """거래 id → 거래가 속한 단지 id. 단지가 없는 거래는 담지 않는다."""
+    complex_ids: dict[int, int] = {}
+    for property_type in COMPLEX_PROPERTY_TYPES:
+        targets = [transaction for transaction in transactions if transaction.property_type == property_type]
+        if not targets:
+            continue
+        key_columns = COMPLEX_KEY_COLUMNS[property_type]
+        # 단지 유니크 인덱스를 타도록 아파트는 단지 일련번호로, 오피스텔은 인덱스 선두인 시도·시군구로 좁힌다.
+        if property_type == PropertyType.APT:
+            condition = Complex.apartment_serial_number.in_(
+                list({transaction.apartment_serial_number for transaction in targets})
+            )
+        else:
+            condition = tuple_(Complex.sido_code, Complex.sigungu_code).in_(
+                list({(transaction.sido_code, transaction.sigungu_code) for transaction in targets})
+            )
+        result = await session.execute(
+            select(Complex.id, *(getattr(Complex, column) for column in key_columns)).where(
+                Complex.property_type == property_type, condition
+            )
+        )
+        # 오피스텔 단지 키에는 NULL이 있을 수 있다. SQL 비교와 달리 파이썬 튜플은 None끼리 같아 그대로 맞춘다.
+        ids_by_key = {tuple(row[1:]): row[0] for row in result}
+        for transaction in targets:
+            complex_id = ids_by_key.get(tuple(getattr(transaction, column) for column in key_columns))
+            if complex_id is not None:
+                complex_ids[transaction.id] = complex_id
+    return complex_ids
+
+
+def build_sale_response(
+    transaction: SaleTransaction, names: dict[tuple[str, str], str], complex_ids: dict[int, int]
 ) -> SalePropTransactionResponse:
-    """매매 ORM 행을 응답 스키마로 바꾸고 캐시에서 찾은 지역명을 채운다."""
+    """매매 ORM 행을 응답 스키마로 바꾸고 캐시에서 찾은 지역명과 단지 id를 채운다."""
     response = SalePropTransactionResponse.model_validate(transaction)
     response.region_name = names.get((transaction.sido_code, transaction.sigungu_code))
+    response.complex_id = complex_ids.get(transaction.id)
     return response
 
 
-def _build_rent_response_with_region_name(
-    transaction: RentTransaction, names: dict[tuple[str, str], str]
+def _build_rent_response(
+    transaction: RentTransaction, names: dict[tuple[str, str], str], complex_ids: dict[int, int]
 ) -> RentPropTransactionResponse:
-    """전월세 ORM 행을 응답 스키마로 바꾸고 캐시에서 찾은 지역명을 채운다."""
+    """전월세 ORM 행을 응답 스키마로 바꾸고 캐시에서 찾은 지역명과 단지 id를 채운다."""
     response = RentPropTransactionResponse.model_validate(transaction)
     response.region_name = names.get((transaction.sido_code, transaction.sigungu_code))
+    response.complex_id = complex_ids.get(transaction.id)
     return response
 
 
@@ -91,8 +126,10 @@ async def get_sale_transactions(
     result = await session.execute(
         select(SaleTransaction).where(*conditions).order_by(SaleTransaction.id).limit(query.limit).offset(query.offset)
     )
+    transactions = list(result.scalars())
     names = await get_region_names(session)
-    return [build_sale_response_with_region_name(transaction, names) for transaction in result.scalars()]
+    complex_ids = await get_complex_ids(session, transactions)
+    return [build_sale_response(transaction, names, complex_ids) for transaction in transactions]
 
 
 async def get_rent_transactions(
@@ -110,8 +147,10 @@ async def get_rent_transactions(
     result = await session.execute(
         select(RentTransaction).where(*conditions).order_by(RentTransaction.id).limit(query.limit).offset(query.offset)
     )
+    transactions = list(result.scalars())
     names = await get_region_names(session)
-    return [_build_rent_response_with_region_name(transaction, names) for transaction in result.scalars()]
+    complex_ids = await get_complex_ids(session, transactions)
+    return [_build_rent_response(transaction, names, complex_ids) for transaction in transactions]
 
 
 async def get_sale_transaction_detail(session: AsyncSession, transaction_id: int) -> SalePropTransactionDetailResponse:
@@ -121,7 +160,8 @@ async def get_sale_transaction_detail(session: AsyncSession, transaction_id: int
         raise TransactionNotFoundError("실거래를 찾을 수 없습니다")
 
     names = await get_region_names(session)
-    base_transaction = build_sale_response_with_region_name(transaction, names)
+    complex_ids = await get_complex_ids(session, [transaction])
+    base_transaction = build_sale_response(transaction, names, complex_ids)
     group_columns = PRICE_TREND_GROUP_COLUMNS.get(transaction.property_type)
     if group_columns is None:
         return SalePropTransactionDetailResponse(base_transaction=base_transaction, trend=None)
@@ -154,7 +194,8 @@ async def get_rent_transaction_detail(session: AsyncSession, transaction_id: int
         raise TransactionNotFoundError("실거래를 찾을 수 없습니다")
 
     names = await get_region_names(session)
-    base_transaction = _build_rent_response_with_region_name(transaction, names)
+    complex_ids = await get_complex_ids(session, [transaction])
+    base_transaction = _build_rent_response(transaction, names, complex_ids)
     group_columns = PRICE_TREND_GROUP_COLUMNS.get(transaction.property_type)
     if group_columns is None:
         return RentPropTransactionDetailResponse(

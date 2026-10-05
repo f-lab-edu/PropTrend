@@ -10,9 +10,10 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.dependencies import get_today
 from src.main import app
-from src.model import LegalDongCodeRawItem, PropertyType, RentTransaction, SaleTransaction
+from src.model import Complex, LegalDongCodeRawItem, PropertyType, RentTransaction, SaleTransaction
 
 from .conftest import seed_rows
+from .test_prop_transaction import APARTMENT_COMPLEX_ROW, seed_complexes
 from .test_prop_transaction import RENT_ROW as BASE_RENT_ROW
 from .test_prop_transaction import SALE_ROW as BASE_SALE_ROW
 
@@ -80,8 +81,14 @@ class TestGetDailySummary:
         ):
             yield dict(zip(sale_rows, sales, strict=True))
 
+    @pytest_asyncio.fixture(scope="class", loop_scope="session")
+    @classmethod
+    async def complexes(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, Complex]]:
+        async with seed_complexes(session_factory, {"apartment": APARTMENT_COMPLEX_ROW}) as complexes:
+            yield complexes
+
     async def test_returns_summary_of_previous_day(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
+        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
         """호출일 전날 계약된 매매의 최고가·최저가 거래와 매매·전월세 합계 건수를 해제 거래를 빼고 준다."""
         app.dependency_overrides[get_today] = lambda: date(2026, 10, 5)
@@ -94,6 +101,7 @@ class TestGetDailySummary:
             "highest_sale": {
                 "id": seed["highest"].id,
                 "property_type": "APT",
+                "complex_id": complexes["apartment"].id,
                 "deal_date": "2026-10-04",
                 "deal_amount": 3_000_000_000,
                 "dealing_type": "중개거래",
@@ -111,6 +119,7 @@ class TestGetDailySummary:
             "lowest_sale": {
                 "id": seed["lowest"].id,
                 "property_type": "SINGLE_MULTI",
+                "complex_id": None,
                 "deal_date": "2026-10-04",
                 "deal_amount": 11_000_000,
                 "dealing_type": "중개거래",
@@ -245,8 +254,16 @@ class TestGetPriceMovers:
         ):
             yield dict(zip(sale_rows, sales, strict=True))
 
+    @pytest_asyncio.fixture(scope="class", loop_scope="session")
+    @classmethod
+    async def complexes(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, Complex]]:
+        async with seed_complexes(
+            session_factory, {"s1": APARTMENT_COMPLEX_ROW | {"apartment_serial_number": "11680-2001"}}
+        ) as complexes:
+            yield complexes
+
     async def test_returns_top_surge_and_plunge(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
+        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
         """아파트·오피스텔을 합쳐 변동률 순으로 급등·급락 각 5개까지 주고, 동률이면 최근 거래 id 순이다."""
         app.dependency_overrides[get_today] = lambda: PRICE_MOVERS_BASE_DATE
@@ -261,6 +278,7 @@ class TestGetPriceMovers:
             "latest_sale": {
                 "id": seed["s1_latest"].id,
                 "property_type": "APT",
+                "complex_id": complexes["s1"].id,
                 "deal_date": "2026-09-01",
                 "deal_amount": 1_500_000_000,
                 "dealing_type": "중개거래",

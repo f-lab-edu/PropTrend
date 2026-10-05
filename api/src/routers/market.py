@@ -23,6 +23,7 @@ router = APIRouter()
         "- 기준일에 매매가 없으면 `highest_sale`, `lowest_sale`은 `null`입니다.\n"
         "- `transaction_count`는 부동산 유형 구분 없이 매매와 전월세 건수를 합친 값입니다.\n"
         "- 해제된 매매는 최고가·최저가와 거래건수에서 모두 뺍니다.\n"
+        "- `complex_id`는 거래가 속한 단지 id이며, 단지가 없는 거래(연립다세대·단독다가구 등)는 `null`입니다.\n"
         "- `deal_amount`의 단위는 원입니다."
     ),
 )
@@ -50,6 +51,7 @@ async def get_market_daily_summary(
         "- `change_rate`는 `(최근 - 직전) / 직전 × 100`을 소수 둘째 자리까지 반올림한 값(%)입니다.\n"
         "- `surge`는 변동률이 0보다 큰 단지, `plunge`는 0보다 작은 단지만 담으며 5개보다 적을 수 있습니다.\n"
         "- 변동률이 같으면 최근 거래의 `id`가 작은 단지가 먼저 옵니다.\n"
+        "- `latest_sale.complex_id`는 최근 거래가 속한 단지 id입니다.\n"
         "- 요청마다 전국 거래를 집계하므로 응답에 수 초가 걸릴 수 있습니다.\n"
         "- `deal_amount`의 단위는 원입니다."
     ),
