@@ -108,6 +108,36 @@ async def test_http_error_does_not_leak_service_key(mock_api: Any) -> None:
     assert error.value.__cause__ is None
 
 
+def gateway_error_body(reason_code: str) -> str:
+    """공공데이터포털 게이트웨이가 HTTP 오류와 함께 돌려주는 본문."""
+    return (
+        "<OpenAPI_ServiceResponse><cmmMsgHeader><errMsg>SERVICE ERROR</errMsg>"
+        f"<returnReasonCode>{reason_code}</returnReasonCode></cmmMsgHeader></OpenAPI_ServiceResponse>"
+    )
+
+
+async def test_gateway_daily_limit_is_daily_limit(mock_api: Any) -> None:
+    # 일일 한도를 넘기면 결과코드 22가 아니라 HTTP 429와 게이트웨이 본문의 사유 코드 22로 온다.
+    mock_api(responder(gateway_error_body("22"), status_code=429))
+
+    with pytest.raises(DailyLimitReachedError) as error:
+        await RtmsDataCollector("https://api.test/rtms", "11110", "202602").collect()
+
+    assert SERVICE_KEY not in str(error.value)
+    assert error.value.__cause__ is None
+
+
+@pytest.mark.parametrize("body", [gateway_error_body("30"), "", "not xml"])
+async def test_other_http_429_stays_status_error(mock_api: Any, body: str) -> None:
+    # 사유 코드가 22가 아니거나 본문을 읽을 수 없는 429는 일일 제한으로 보지 않는다.
+    mock_api(responder(body, status_code=429))
+
+    with pytest.raises(OpenApiStatusError) as error:
+        await RtmsDataCollector("https://api.test/rtms", "11110", "202602").collect()
+
+    assert error.value.status_code == 429
+
+
 @pytest.mark.parametrize(
     ("sgg_cd", "umd_cd", "ri_cd"),
     [("000", "000", "00"), ("110", "101", "00"), ("110", "000", "01")],

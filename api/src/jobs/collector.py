@@ -4,6 +4,7 @@ import logging
 import os
 from collections.abc import Sequence
 from typing import Any
+from xml.etree.ElementTree import ParseError
 
 import httpx
 from defusedxml.ElementTree import fromstring as safe_xml_fromstring
@@ -34,7 +35,7 @@ class OpenApiStatusError(OpenApiError):
 
 
 class DailyLimitReachedError(OpenApiError):
-    """일일 활용건수를 초과했다(결과코드 22). 남은 요청도 모두 같은 응답을 받는다."""
+    """일일 활용건수를 초과했다(결과코드 22, 게이트웨이는 HTTP 429). 남은 요청도 모두 같은 응답을 받는다."""
 
 
 def _raise_for_status(response: httpx.Response) -> None:
@@ -42,8 +43,23 @@ def _raise_for_status(response: httpx.Response) -> None:
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError:
+        # 일일 한도를 넘기면 공공데이터포털 게이트웨이가 결과코드 22 대신 HTTP 429와 자체 오류 본문을 돌려준다.
+        # 초당 호출 제한 같은 다른 429와 가르려고 상태 코드가 아니라 본문의 사유 코드를 본다.
+        if _gateway_reason_code(response) == DAILY_LIMIT_RESULT_CODE:
+            raise DailyLimitReachedError("오픈API 일일 호출 제한(게이트웨이)") from None
         # from None으로 원인을 끊지 않으면 logger.exception이 __cause__까지 찍어 URL이 다시 샌다.
         raise OpenApiStatusError(response.status_code) from None
+
+
+def _gateway_reason_code(response: httpx.Response) -> str | None:
+    """공공데이터포털 게이트웨이 오류 본문의 returnReasonCode. 그 형식이 아니면 None."""
+    try:
+        root = safe_xml_fromstring(response.text)
+    except ParseError, ValueError:
+        # 오류 응답의 본문은 형식을 보장하지 않는다. defusedxml이 막은 문서는 ValueError 계열로 온다.
+        # 읽지 못하면 상태 코드 오류로 처리되게 둔다.
+        return None
+    return root.findtext("./cmmMsgHeader/returnReasonCode")
 
 
 def _check_rtms_result_code(result_code: str | None, result_msg: str | None) -> None:
