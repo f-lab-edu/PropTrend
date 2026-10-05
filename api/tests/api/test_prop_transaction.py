@@ -34,6 +34,7 @@ SALE_ROW = {
     "umd_name": "역삼동",
     "jibun": "123-4",
     "building_name": "역삼래미안",
+    "apartment_serial_number": "11680-1001",
     "apartment_dong": "101",
     "deal_date": date(2026, 2, 27),
     "deal_amount": 1_500_000_000,
@@ -50,6 +51,7 @@ RENT_ROW = {
     "umd_name": "역삼동",
     "jibun": "123-4",
     "building_name": "역삼래미안",
+    "apartment_serial_number": "11680-1001",
     "deal_date": date(2026, 2, 27),
     "deposit": 800_000_000,
     "monthly_rent": 0,
@@ -295,14 +297,24 @@ ROW_HOUSE_OVERRIDES = {
     "house_type": "다세대",
     "jibun": "55-1",
     "building_name": "(55-1)",
+    "apartment_serial_number": None,
     "exclusive_use_area": 40.12,
     "build_year": 2015,
+}
+OFFICETEL_OVERRIDES = {
+    "property_type": PropertyType.OFFICETEL,
+    "jibun": "200",
+    "building_name": "역삼오피스텔",
+    "apartment_serial_number": None,
+    "exclusive_use_area": 30.12,
+    "build_year": 2018,
 }
 SINGLE_MULTI_OVERRIDES = {
     "property_type": PropertyType.SINGLE_MULTI,
     "house_type": "다가구",
     "jibun": None,
     "building_name": None,
+    "apartment_serial_number": None,
     "exclusive_use_area": None,
     "floor": None,
     "total_floor_area": 36.0,
@@ -319,16 +331,25 @@ class TestGetSalePropTransactionDetail:
     @classmethod
     async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, SaleTransaction]]:
         row_house = SALE_ROW | ROW_HOUSE_OVERRIDES | {"apartment_dong": None}
+        officetel = SALE_ROW | OFFICETEL_OVERRIDES | {"apartment_dong": None}
         rows = {
             "target": SALE_ROW,
             "earlier": SALE_ROW | {"deal_date": date(2025, 3, 10), "deal_amount": 1_300_000_000, "floor": 5},
             "cancelled": SALE_ROW | {"deal_date": date(2026, 1, 10), "cancel_deal_type": "O"},
             "other_area": SALE_ROW | {"exclusive_use_area": 59.99},
-            "other_building": SALE_ROW | {"building_name": "역삼자이"},
+            "other_building": SALE_ROW | {"apartment_serial_number": "11680-2002"},
+            "renamed": SALE_ROW | {"building_name": "역삼래미안포레", "deal_date": date(2025, 9, 1), "floor": 7},
+            "missing_serial_number": SALE_ROW | {"apartment_serial_number": None, "deal_date": date(2025, 6, 1)},
             "row_house": row_house,
             "row_house_renamed": row_house
             | {"building_name": "역삼빌라", "exclusive_use_area": 59.5, "deal_date": date(2024, 5, 1)},
             "row_house_rebuilt": row_house | {"build_year": 1990, "deal_date": date(2010, 5, 1)},
+            "row_house_missing_build_year": row_house | {"build_year": None, "deal_date": date(2023, 5, 1)},
+            "row_house_missing_jibun": row_house | {"jibun": None, "deal_date": date(2022, 5, 1)},
+            "officetel": officetel,
+            "officetel_earlier": officetel | {"deal_date": date(2025, 4, 1), "deal_amount": 300_000_000, "floor": 3},
+            "officetel_rebuilt": officetel | {"build_year": 1995, "deal_date": date(2012, 5, 1)},
+            "officetel_other_area": officetel | {"exclusive_use_area": 30.05},
             "single_multi": SALE_ROW
             | SINGLE_MULTI_OVERRIDES
             | {"jibun": "1**", "apartment_dong": None, "build_year": 1990, "plottage_area": 150.0},
@@ -339,10 +360,10 @@ class TestGetSalePropTransactionDetail:
         ):
             yield dict(zip(rows, sales, strict=True))
 
-    async def test_returns_apartment_trend_of_same_building_and_area(
+    async def test_returns_apartment_trend_of_same_serial_number_and_area(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
-        """아파트는 같은 단지·전용면적의 해제되지 않은 거래를 계약일 순으로 추이에 담는다."""
+        """아파트는 단지명이 바뀌어도 같은 단지 일련번호·전용면적의 해제되지 않은 거래를 계약일 순으로 담는다."""
         response = await client.get(f"{SALES_URL}/{seed['target'].id}")
 
         assert response.status_code == 200
@@ -366,9 +387,33 @@ class TestGetSalePropTransactionDetail:
             },
             "trend": [
                 {"id": seed["earlier"].id, "deal_date": "2025-03-10", "deal_amount": 1_300_000_000, "floor": 5},
+                {"id": seed["renamed"].id, "deal_date": "2025-09-01", "deal_amount": 1_500_000_000, "floor": 7},
                 {"id": seed["target"].id, "deal_date": "2026-02-27", "deal_amount": 1_500_000_000, "floor": 10},
             ],
         }
+
+    async def test_returns_empty_trend_when_apartment_serial_number_missing(
+        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
+    ) -> None:
+        """단지 일련번호가 없는 아파트는 같은 단지를 찾을 수 없어 추이를 빈 목록으로 준다."""
+        response = await client.get(f"{SALES_URL}/{seed['missing_serial_number'].id}")
+
+        body = response.json()
+        assert response.status_code == 200
+        assert body["base_transaction"]["id"] == seed["missing_serial_number"].id
+        assert body["trend"] == []
+
+    async def test_groups_officetel_by_build_year_and_exact_area(
+        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
+    ) -> None:
+        """오피스텔은 같은 지번·건물명·건축년도이면서 전용면적이 정확히 같은 거래만 묶는다."""
+        response = await client.get(f"{SALES_URL}/{seed['officetel'].id}")
+
+        assert response.status_code == 200
+        assert [point["id"] for point in response.json()["trend"]] == [
+            seed["officetel_earlier"].id,
+            seed["officetel"].id,
+        ]
 
     async def test_groups_row_house_by_build_year_instead_of_name(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
@@ -381,6 +426,18 @@ class TestGetSalePropTransactionDetail:
             seed["row_house_renamed"].id,
             seed["row_house"].id,
         ]
+
+    @pytest.mark.parametrize("key", ["row_house_missing_build_year", "row_house_missing_jibun"])
+    async def test_returns_empty_trend_when_row_house_key_missing(
+        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], key: str
+    ) -> None:
+        """연립다세대는 지번이나 건축년도가 없으면 같은 건물을 특정할 수 없어 추이를 빈 목록으로 준다."""
+        response = await client.get(f"{SALES_URL}/{seed[key].id}")
+
+        body = response.json()
+        assert response.status_code == 200
+        assert body["base_transaction"]["id"] == seed[key].id
+        assert body["trend"] == []
 
     async def test_returns_null_trend_for_single_multi(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
@@ -425,15 +482,24 @@ class TestGetRentPropTransactionDetail:
     @classmethod
     async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, RentTransaction]]:
         row_house = RENT_ROW | ROW_HOUSE_OVERRIDES
+        officetel = RENT_ROW | OFFICETEL_OVERRIDES
         rows = {
             "target": RENT_ROW,
             "earlier_jeonse": RENT_ROW | {"deal_date": date(2024, 3, 1), "deposit": 700_000_000, "floor": 5},
             "monthly": RENT_ROW | {"deal_date": date(2025, 6, 1), "deposit": 50_000_000, "monthly_rent": 1_500_000},
             "other_area": RENT_ROW | {"exclusive_use_area": 59.99},
-            "other_building": RENT_ROW | {"building_name": "역삼자이"},
+            "other_building": RENT_ROW | {"apartment_serial_number": "11680-2002"},
+            "renamed": RENT_ROW | {"building_name": "역삼래미안포레", "deal_date": date(2025, 9, 1), "floor": 7},
+            "missing_serial_number": RENT_ROW | {"apartment_serial_number": None, "deal_date": date(2025, 6, 1)},
             "row_house": row_house,
             "row_house_renamed": row_house | {"building_name": "역삼빌라", "deal_date": date(2024, 5, 1)},
             "row_house_rebuilt": row_house | {"build_year": 1990, "deal_date": date(2012, 5, 1)},
+            "row_house_missing_build_year": row_house | {"build_year": None, "deal_date": date(2023, 5, 1)},
+            "row_house_missing_jibun": row_house | {"jibun": None, "deal_date": date(2022, 5, 1)},
+            "officetel": officetel,
+            "officetel_earlier": officetel | {"deal_date": date(2025, 4, 1), "deposit": 250_000_000, "floor": 3},
+            "officetel_rebuilt": officetel | {"build_year": 1995, "deal_date": date(2012, 5, 1)},
+            "officetel_other_area": officetel | {"exclusive_use_area": 30.05},
             "single_multi": RENT_ROW | SINGLE_MULTI_OVERRIDES | {"build_year": 1991},
         }
         async with (
@@ -445,7 +511,7 @@ class TestGetRentPropTransactionDetail:
     async def test_returns_apartment_trend_split_into_jeonse_and_monthly_rent(
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
     ) -> None:
-        """아파트는 같은 단지·전용면적의 거래를 전세와 월세로 나눠 계약일 순으로 담는다."""
+        """아파트는 단지명이 바뀌어도 같은 단지 일련번호·전용면적의 거래를 전세와 월세로 나눠 계약일 순으로 담는다."""
         response = await client.get(f"{RENTS_URL}/{seed['target'].id}")
 
         assert response.status_code == 200
@@ -475,6 +541,13 @@ class TestGetRentPropTransactionDetail:
                     "floor": 5,
                 },
                 {
+                    "id": seed["renamed"].id,
+                    "deal_date": "2025-09-01",
+                    "deposit": 800_000_000,
+                    "monthly_rent": 0,
+                    "floor": 7,
+                },
+                {
                     "id": seed["target"].id,
                     "deal_date": "2026-02-27",
                     "deposit": 800_000_000,
@@ -493,6 +566,17 @@ class TestGetRentPropTransactionDetail:
             ],
         }
 
+    async def test_groups_officetel_by_build_year_and_exact_area(
+        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
+    ) -> None:
+        """오피스텔은 같은 지번·건물명·건축년도이면서 전용면적이 정확히 같은 거래만 묶는다."""
+        response = await client.get(f"{RENTS_URL}/{seed['officetel'].id}")
+
+        body = response.json()
+        assert response.status_code == 200
+        assert [point["id"] for point in body["jeonse_trend"]] == [seed["officetel_earlier"].id, seed["officetel"].id]
+        assert body["monthly_rent_trend"] == []
+
     async def test_groups_row_house_by_build_year_instead_of_name(
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
     ) -> None:
@@ -502,6 +586,31 @@ class TestGetRentPropTransactionDetail:
         body = response.json()
         assert response.status_code == 200
         assert [point["id"] for point in body["jeonse_trend"]] == [seed["row_house_renamed"].id, seed["row_house"].id]
+        assert body["monthly_rent_trend"] == []
+
+    async def test_returns_empty_trends_when_apartment_serial_number_missing(
+        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
+    ) -> None:
+        """단지 일련번호가 없는 아파트는 같은 단지를 찾을 수 없어 전세·월세 추이를 모두 빈 목록으로 준다."""
+        response = await client.get(f"{RENTS_URL}/{seed['missing_serial_number'].id}")
+
+        body = response.json()
+        assert response.status_code == 200
+        assert body["base_transaction"]["id"] == seed["missing_serial_number"].id
+        assert body["jeonse_trend"] == []
+        assert body["monthly_rent_trend"] == []
+
+    @pytest.mark.parametrize("key", ["row_house_missing_build_year", "row_house_missing_jibun"])
+    async def test_returns_empty_trend_when_row_house_key_missing(
+        self, client: httpx.AsyncClient, seed: dict[str, RentTransaction], key: str
+    ) -> None:
+        """연립다세대는 지번이나 건축년도가 없으면 같은 건물을 특정할 수 없어 전세·월세 추이를 모두 빈 목록으로 준다."""
+        response = await client.get(f"{RENTS_URL}/{seed[key].id}")
+
+        body = response.json()
+        assert response.status_code == 200
+        assert body["base_transaction"]["id"] == seed[key].id
+        assert body["jeonse_trend"] == []
         assert body["monthly_rent_trend"] == []
 
     async def test_returns_null_trend_for_single_multi(

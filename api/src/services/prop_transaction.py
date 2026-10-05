@@ -20,14 +20,21 @@ from ..schemas.prop_transaction import (
 REGION_NAME_TTL_SECONDS = 60 * 60
 
 # 유형·시도·시군구에 더해 같은 매물로 묶는 컬럼.
-# 아파트·오피스텔은 단지 안의 평면 타입까지 나누려고 전용면적을 그대로 쓴다.
+# 아파트·오피스텔은 단지 안의 평면 타입까지 나누려고 전용면적을 구간으로 묶지 않고 그대로 쓴다.
+# 오피스텔은 단지 일련번호가 없어 지번·건물명으로 건물을 잡고, 같은 자리에 다시 지은 건물은 건축년도로 가른다.
+# 아파트는 단지명이 과거 거래까지 소급해 바뀌어 이름으로 묶으면 같은 단지가 갈라지므로 단지 일련번호로 묶는다.
 # 연립다세대는 건물명의 약 20%가 "(지번)"으로 채워져 있고 재건축되면 이름이 바뀌므로 이름 대신 건축년도로 건물을 가른다.
 # 단독다가구는 지번이 가려지거나 없고 건물명·전용면적도 없어 같은 매물을 특정할 수 없으므로 추이를 주지 않는다.
 PRICE_TREND_GROUP_COLUMNS: dict[PropertyType, tuple[str, ...]] = {
-    PropertyType.APT: ("umd_name", "jibun", "building_name", "exclusive_use_area"),
-    PropertyType.OFFICETEL: ("umd_name", "jibun", "building_name", "exclusive_use_area"),
+    PropertyType.APT: ("apartment_serial_number", "exclusive_use_area"),
+    PropertyType.OFFICETEL: ("umd_name", "jibun", "building_name", "build_year", "exclusive_use_area"),
     PropertyType.ROW_HOUSE: ("umd_name", "jibun", "build_year"),
 }
+
+# 조회한 거래의 묶음 컬럼이 하나라도 NULL이면 같은 매물을 특정할 수 없다고 보고 빈 추이를 주는 유형.
+# 아파트는 재수집 전 매매의 단지 일련번호가, 연립다세대는 지번·건축년도가 빈 행이 있다.
+# 오피스텔은 빈 값이 있는 행도 NULL끼리 같은 값으로 보고 묶는다.
+EMPTY_TREND_ON_NULL_KEY_TYPES = frozenset({PropertyType.APT, PropertyType.ROW_HOUSE})
 
 # 캐시된 지역명 데이터
 _region_names: dict[tuple[str, str], str] = {}
@@ -118,8 +125,14 @@ async def get_sale_transaction_detail(session: AsyncSession, transaction_id: int
     group_columns = PRICE_TREND_GROUP_COLUMNS.get(transaction.property_type)
     if group_columns is None:
         return SalePropTransactionDetailResponse(base_transaction=base_transaction, trend=None)
+    # 아래 IS NOT DISTINCT FROM이 NULL끼리 묶어 서로 다른 매물이 한 추이로 섞이지 않도록 먼저 끊는다.
+    if transaction.property_type in EMPTY_TREND_ON_NULL_KEY_TYPES and any(
+        getattr(transaction, column) is None for column in group_columns
+    ):
+        return SalePropTransactionDetailResponse(base_transaction=base_transaction, trend=[])
 
-    # 원본에 지번·건축년도가 빈 행이 있어, NULL끼리도 같은 값으로 보도록 IS NOT DISTINCT FROM으로 비교한다.
+    # 오피스텔은 원본에 빈 값이 있는 행도 NULL끼리 같은 값으로 보도록 IS NOT DISTINCT FROM으로 비교한다.
+    # 묶음 컬럼이 모두 채워진 거래라면 NULL인 행은 이 비교에서 자연스럽게 빠진다.
     conditions = [
         getattr(SaleTransaction, column).is_not_distinct_from(getattr(transaction, column))
         for column in ("property_type", "sido_code", "sigungu_code", *group_columns)
@@ -147,8 +160,15 @@ async def get_rent_transaction_detail(session: AsyncSession, transaction_id: int
         return RentPropTransactionDetailResponse(
             base_transaction=base_transaction, jeonse_trend=None, monthly_rent_trend=None
         )
+    # 매매와 같은 규칙이다.
+    if transaction.property_type in EMPTY_TREND_ON_NULL_KEY_TYPES and any(
+        getattr(transaction, column) is None for column in group_columns
+    ):
+        return RentPropTransactionDetailResponse(
+            base_transaction=base_transaction, jeonse_trend=[], monthly_rent_trend=[]
+        )
 
-    # 원본에 지번·건축년도가 빈 행이 있어, NULL끼리도 같은 값으로 보도록 IS NOT DISTINCT FROM으로 비교한다.
+    # 오피스텔은 원본에 빈 값이 있는 행도 NULL끼리 같은 값으로 보도록 IS NOT DISTINCT FROM으로 비교한다.
     conditions = [
         getattr(RentTransaction, column).is_not_distinct_from(getattr(transaction, column))
         for column in ("property_type", "sido_code", "sigungu_code", *group_columns)
