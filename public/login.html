@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>로그인</title>
+    <!-- 빌드 없이 쓰는 Tailwind 브라우저 빌드. 런타임에 CSS를 만들므로 운영 배포 전에는 standalone CLI로 대체한다. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script type="module" src="/login.js"></script>
+  </head>
+  <body class="min-h-screen bg-slate-50 text-slate-900">
+    <header class="border-b border-slate-200 bg-white">
+      <div class="mx-auto flex max-w-6xl items-center px-4 py-3">
+        <a href="/" class="font-bold">부동산 실거래 조회</a>
+      </div>
+    </header>
+    <main class="mx-auto max-w-sm px-4 py-12">
+      <h1 class="mb-6 text-2xl font-bold">로그인</h1>
+
+      <form id="login-form" class="flex flex-col gap-4 rounded-xl bg-white p-6 shadow-sm">
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          이메일
+          <input
+            id="email"
+            name="email"
+            type="email"
+            maxlength="255"
+            autocomplete="email"
+            required
+            class="rounded-lg border border-slate-300 px-3 py-2"
+          />
+        </label>
+
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          비밀번호
+          <input
+            id="password"
+            name="password"
+            type="password"
+            autocomplete="current-password"
+            required
+            class="rounded-lg border border-slate-300 px-3 py-2"
+          />
+        </label>
+
+        <p id="message" class="hidden text-sm text-red-600"></p>
+
+        <button
+          id="submit"
+          type="submit"
+          class="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700 disabled:bg-slate-300"
+        >
+          로그인
+        </button>
+        <a
+          href="/signup.html"
+          class="rounded-lg border border-slate-300 bg-white px-4 py-2 text-center font-semibold hover:bg-slate-100"
+        >
+          회원가입
+        </a>
+      </form>
+    </main>
+  </body>
+</html>

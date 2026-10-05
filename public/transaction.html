@@ -10,8 +10,16 @@
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
     <script type="module" src="/transaction.js"></script>
+    <script type="module" src="/auth.js"></script>
   </head>
   <body class="min-h-screen bg-slate-50 text-slate-900">
+    <header class="border-b border-slate-200 bg-white">
+      <div class="mx-auto flex max-w-4xl items-center justify-between px-4 py-3">
+        <a href="/" class="font-bold">부동산 실거래 조회</a>
+        <!-- 로그인 여부를 확인하기 전에는 비워 두되 자리를 잡아 버튼이 나타날 때 레이아웃이 밀리지 않게 한다. -->
+        <nav id="auth-nav" class="h-8 min-w-20 text-right"></nav>
+      </div>
+    </header>
     <main class="mx-auto max-w-4xl px-4 py-8">
       <button
         id="back"
