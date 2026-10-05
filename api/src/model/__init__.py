@@ -7,6 +7,7 @@
 - user: 서비스 사용자 계정과 로그인 세션
 - complex: 실거래 갱신과 무관하게 유지되는 아파트·오피스텔 단지
 - favorite: 사용자가 즐겨찾기한 단지
+- region: legal_dong_code_raw_items를 가공해 채우는 시도·시군구 목록
 """
 
 from .base import Base
@@ -26,6 +27,7 @@ from .raw import (
     RTMSRawItem,
 )
 from .refresh_unit_state import LAST_ERROR_MAX, RefreshUnitState, UnitStatus
+from .region import Region
 from .user import User, UserSession
 
 __all__ = [
@@ -43,6 +45,7 @@ __all__ = [
     "RTMSRawItem",
     "RawLoadProgress",
     "RefreshUnitState",
+    "Region",
     "RentTransaction",
     "SaleTransaction",
     "TransactionMixin",

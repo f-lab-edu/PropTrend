@@ -17,6 +17,7 @@ from ..model import (
     Complex,
     LegalDongCodeRawItem,
     PropertyType,
+    Region,
     RentTransaction,
     RTMSRawItem,
     SaleTransaction,
@@ -101,6 +102,22 @@ class LegalDongCodeRawItemLoader:
             loaded = 0
 
         logger.debug("법정동코드 bronze 적재 완료", extra={"stage": "load_legal_dong", "loaded": loaded})
+        return loaded
+
+
+class RegionLoader:
+    """전처리기가 넘긴 시도·시군구 행을 regions에 적재한다."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def load(self, rows: list[dict[str, Any]]) -> int:
+        # 전처리에서 전부 걸러진 채 확정되면 지역 필터가 통째로 사라진다. 예외로 bronze 교체까지 되돌린다.
+        if not rows:
+            raise ValueError("적재할 지역 행이 없다")
+
+        loaded = await _insert_chunked(self.session, Region.__table__, rows)
+        logger.debug("지역 silver 적재 완료", extra={"stage": "load_region", "loaded": loaded})
         return loaded
 
 

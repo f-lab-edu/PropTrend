@@ -20,6 +20,7 @@ from .middlewares import RequestIdFilter, log_requests
 from .routers.favorite import router as favorite_router
 from .routers.market import router as market_router
 from .routers.prop_transaction import router as prop_transaction_router
+from .routers.region import router as region_router
 from .routers.user import router as user_router
 
 load_dotenv()
@@ -60,6 +61,7 @@ app.include_router(
 app.include_router(user_router, prefix="/api/users", tags=["user"])
 app.include_router(market_router, prefix="/api/market", tags=["market"])
 app.include_router(favorite_router, prefix="/api/favorites", tags=["favorite"])
+app.include_router(region_router, prefix="/api/regions", tags=["region"])
 
 
 @app.get("/health")

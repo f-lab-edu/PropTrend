@@ -10,6 +10,7 @@ from ..model import (
     Base,
     LegalDongCodeRawItem,
     PropertyType,
+    Region,
     RentTransaction,
     RTMSRawItem,
     SaleTransaction,
@@ -103,4 +104,17 @@ class LegalDongCodeRawItemCleaner:
         logger.debug(
             "법정동코드 bronze 데이터 정리 완료", extra={"stage": "clean_legal_dong", "deleted": result.rowcount}
         )
+        return result.rowcount
+
+
+class RegionCleaner:
+    """regions를 통째로 비운다."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def clean(self) -> int:
+        # 법정동코드 bronze와 같은 트랜잭션에서 비우고 채운다. 사이에서 끊기면 지역 필터가 사라진다.
+        result = await self.session.execute(delete(Region.__table__))
+        logger.debug("지역 silver 데이터 정리 완료", extra={"stage": "clean_region", "deleted": result.rowcount})
         return result.rowcount

@@ -121,6 +121,44 @@ class RentPreprocessor(RawTablePreprocessor):
         }
 
 
+class LegalDongCodePreprocessor:
+    """법정동코드 시군구 행을 `regions` 행으로 바꾼다."""
+
+    def preprocess(self, items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
+        """한 행이라도 비정상이면 예외를 올려 bronze 교체까지 함께 되돌린다."""
+        names = [_required(item, "locatadd_nm") for item in items]
+        # 일반구를 둔 시("경기도 수원시")는 실거래가 구 코드로만 들어와 고르면 항상 빈 결과다.
+        # 코드 앞자리로는 영동군(43740)·증평군(43745)처럼 별개 지역이 겹쳐 이름으로 판별한다.
+        ancestors = {" ".join(tokens[:i]) for tokens in (name.split() for name in names) for i in range(1, len(tokens))}
+
+        rows: list[dict[str, Any]] = []
+        sido_names: dict[str, str] = {}
+        for item, name in zip(items, names, strict=True):
+            if name in ancestors:
+                continue
+            # 실거래가 API의 LAWD_CD를 만드는 sigungu_codes()와 같은 출처(region_cd 앞 5자리)를 쓴다.
+            sido_code, sigungu_code = split_sgg_cd(_required(item, "region_cd")[:5])
+            sido_name, _, sigungu_name = name.partition(" ")
+            # 시도명이 행마다 반복되므로 같은 시도가 다른 이름으로 갈라지면 드롭다운에 시도가 둘로 보인다.
+            if sido_names.setdefault(sido_code, sido_name) != sido_name:
+                raise ValueError(f"시도 {sido_code}의 이름이 하나가 아니다: {sido_names[sido_code]!r}, {sido_name!r}")
+            rows.append(
+                {
+                    "sido_code": sido_code,
+                    "sigungu_code": sigungu_code,
+                    "sido_name": sido_name,
+                    # 세종은 시군구 단계 없이 "세종특별자치시"만 온다.
+                    "sigungu_name": sigungu_name or sido_name,
+                }
+            )
+
+        logger.debug(
+            "법정동코드 지역 가공 완료",
+            extra={"stage": "preprocess_region", "rows": len(rows), "excluded": len(items) - len(rows)},
+        )
+        return rows
+
+
 def _text(value: str | None) -> str | None:
     """원본이 쓰는 빈 값 세 가지(None, "", 공백 한 칸)를 모두 None으로 맞춘다."""
     if value is None:

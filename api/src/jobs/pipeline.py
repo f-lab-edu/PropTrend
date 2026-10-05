@@ -16,6 +16,7 @@ from ..db import session_scope
 from ..model import COMPLEX_PROPERTY_TYPES, LegalDongCodeRawItem, PropertyType, UnitStatus
 from .cleaner import (
     LegalDongCodeRawItemCleaner,
+    RegionCleaner,
     RentTransactionCleaner,
     RTMSRawItemCleaner,
     SaleTransactionCleaner,
@@ -31,12 +32,13 @@ from .context import unit_context
 from .loader import (
     ComplexLoader,
     LegalDongCodeRawItemLoader,
+    RegionLoader,
     RentTransactionLoader,
     RTMSRawItemLoader,
     SaleTransactionLoader,
     TransactionLoader,
 )
-from .preprocessor import RawTablePreprocessor, RentPreprocessor, SalePreprocessor
+from .preprocessor import LegalDongCodePreprocessor, RawTablePreprocessor, RentPreprocessor, SalePreprocessor
 from .state import MAX_ATTEMPTS, RefreshUnitStateStore, UnitRecord
 from .utils import parse_deal_ymd, today_kst
 
@@ -265,14 +267,22 @@ async def process_unit(
 
 
 async def refresh_legal_dong_codes() -> int:
-    """시군구 목록의 출처인 법정동코드를 통째로 갱신한다."""
+    """시군구 목록의 출처인 법정동코드와 이를 가공한 지역 목록을 통째로 갱신한다."""
     # 표를 통째로 비우므로, 오류나 빈 응답이 여기까지 올라오지 않는 것이 전제다.
     items = await LegalDongCodeCollector().collect()
     # 비우기와 채우기는 한 트랜잭션이어야 한다. 사이에서 끊기면 시군구 목록이 사라진다.
+    # 지역 목록도 같은 트랜잭션에 묶어 bronze와 다른 시점의 코드를 갖지 않게 한다.
     async with session_scope() as session:
         deleted = await LegalDongCodeRawItemCleaner(session).clean()
         loaded = await LegalDongCodeRawItemLoader(session).load(items)
-    logger.info("법정동코드 %d건 갱신", loaded, extra={"stage": "legal_dong", "deleted": deleted, "loaded": loaded})
+        region_rows = LegalDongCodePreprocessor().preprocess(items)
+        await RegionCleaner(session).clean()
+        regions = await RegionLoader(session).load(region_rows)
+    logger.info(
+        "법정동코드 %d건 갱신",
+        loaded,
+        extra={"stage": "legal_dong", "deleted": deleted, "loaded": loaded, "regions": regions},
+    )
     return loaded
 
 

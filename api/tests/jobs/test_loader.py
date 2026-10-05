@@ -7,7 +7,7 @@ from typing import Any
 import pytest
 
 from src.jobs import loader as loader_module
-from src.jobs.loader import ComplexLoader, RTMSRawItemLoader, SaleTransactionLoader
+from src.jobs.loader import ComplexLoader, RegionLoader, RTMSRawItemLoader, SaleTransactionLoader
 from src.model import PropertyType
 from tests.jobs.conftest import FakeSession
 
@@ -134,3 +134,12 @@ async def test_complex_loader_groups_officetel_with_null_keys() -> None:
     assert loaded == 2
     ((_, params),) = session.statements
     assert [row["jibun"] for row in params] == [None, "2"]
+
+
+async def test_region_loader_rejects_empty_rows() -> None:
+    # 빈 목록으로 확정되면 지역 필터가 사라진다. 예외로 법정동코드 갱신 전체를 되돌린다.
+    session = FakeSession()
+
+    with pytest.raises(ValueError, match="지역 행이 없다"):
+        await RegionLoader(session).load([])
+    assert session.statements == []
