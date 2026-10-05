@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
+from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from .config import get_settings
@@ -67,3 +68,7 @@ app.include_router(region_router, prefix="/api/regions", tags=["region"])
 @app.get("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
+
+
+# "/"에 마운트하면 뒤에 등록한 경로를 가리므로 모든 라우트 다음에 둔다.
+app.mount("/", StaticFiles(directory=get_settings().public_dir, html=True), name="public")

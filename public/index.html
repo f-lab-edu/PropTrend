@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>부동산 실거래 조회</title>
+    <!-- 빌드 없이 쓰는 Tailwind 브라우저 빌드. 런타임에 CSS를 만들므로 운영 배포 전에는 standalone CLI로 대체한다. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="/app.js" defer></script>
+    <script type="module" src="/daily-summary.js"></script>
+  </head>
+  <body class="min-h-screen bg-slate-50 text-slate-900">
+    <main class="mx-auto max-w-6xl px-4 py-8">
+      <h1 class="mb-6 text-2xl font-bold">부동산 실거래 조회</h1>
+
+      <form id="search-form" action="/transactions.html" method="get" class="grid grid-cols-1 gap-4 rounded-xl bg-white p-6 shadow-sm sm:grid-cols-2 lg:grid-cols-6">
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          부동산 유형
+          <select id="property-type" name="property_type" required class="rounded-lg border border-slate-300 px-3 py-2">
+            <option value="APT">아파트</option>
+            <option value="OFFICETEL">오피스텔</option>
+            <option value="ROW_HOUSE">연립다세대</option>
+            <option value="SINGLE_MULTI">단독다가구</option>
+          </select>
+        </label>
+
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          거래 구분
+          <select id="deal-type" name="deal_type" required class="rounded-lg border border-slate-300 px-3 py-2">
+            <option value="sales">매매</option>
+            <option value="rents">전월세</option>
+          </select>
+        </label>
+
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          시도
+          <select id="sido" name="sido_code" required class="rounded-lg border border-slate-300 px-3 py-2">
+            <option value="">불러오는 중…</option>
+          </select>
+        </label>
+
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          시군구
+          <select
+            id="sigungu"
+            name="sigungu_code"
+            required
+            disabled
+            class="rounded-lg border border-slate-300 px-3 py-2 disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            <option value="">시도를 먼저 선택하세요</option>
+          </select>
+        </label>
+
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          거래년월
+          <select id="deal-month" name="deal_ymd" required class="rounded-lg border border-slate-300 px-3 py-2"></select>
+        </label>
+
+        <div class="flex items-end">
+          <button
+            type="submit"
+            class="w-full rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700 disabled:bg-slate-300"
+          >
+            검색
+          </button>
+        </div>
+      </form>
+
+      <p id="message" class="mt-4 hidden text-sm text-red-600"></p>
+
+      <section class="mt-10">
+        <h2 class="text-lg font-semibold">시장 요약</h2>
+        <div class="mt-3">
+          <h3 id="daily-summary-title" class="font-medium">하루 실거래 요약</h3>
+          <p class="text-xs text-slate-500">
+            신고 기한(계약 후 30일)이 지나 대부분 신고된 1개월 전 날짜를 기준으로 합니다.
+          </p>
+          <div id="daily-summary" class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-3">
+            <div class="h-40 animate-pulse rounded-xl bg-white shadow-sm"></div>
+            <div class="h-40 animate-pulse rounded-xl bg-white shadow-sm"></div>
+            <div class="h-40 animate-pulse rounded-xl bg-white shadow-sm"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>

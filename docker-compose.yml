@@ -27,6 +27,10 @@ services:
       # 컨테이너 안의 localhost는 자기 자신이므로 컨테이너 네트워크 주소를 쓴다.
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/prop_trend
       TZ: Asia/Seoul
+      PUBLIC_DIR: /app/public
+    # 빌드 컨텍스트가 ./api라 루트의 public/은 이미지에 들어가지 않으므로 마운트해서 서빙한다.
+    volumes:
+      - ./public:/app/public:ro
     ports:
       - "8000:8000"
     depends_on:
