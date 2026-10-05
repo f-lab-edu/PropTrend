@@ -45,6 +45,8 @@ class SalePropTransactionResponse(AddressResponse):
     deal_date: date
     deal_amount: int
     dealing_type: str | None
+    # 해제된 거래의 해제일. 해제되지 않았으면 null.
+    cancel_deal_date: date | None = None
 
     # 유형별
     house_type: str | None = None  # 단독다가구, 연립다세대

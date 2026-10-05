@@ -120,6 +120,7 @@ class TestGetSalePropTransactions:
             "target": SALE_ROW,
             "same_day": SALE_ROW | {"jibun": "123-5", "deal_amount": 1_200_000_000, "floor": 3},
             "other_date": SALE_ROW | {"deal_date": date(2026, 2, 28)},
+            "cancelled": SALE_ROW | {"jibun": "123-6", "cancel_deal_type": "O", "cancel_deal_date": date(2026, 3, 5)},
             "other_sigungu": SALE_ROW | {"sigungu_code": "650", "umd_name": "서초동", "jibun": "1-1"},
             "other_sido": SALE_ROW | {"sido_code": "26", "sigungu_code": "350", "umd_name": "우동", "jibun": "1-1"},
             "officetel": SALE_ROW | {"property_type": PropertyType.OFFICETEL, "apartment_dong": None},
@@ -140,7 +141,7 @@ class TestGetSalePropTransactions:
     async def test_returns_transactions_matching_all_conditions(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
-        """유형·시도·시군구·계약일이 모두 맞는 매매만 지역명을 붙인 주소와 함께 준다."""
+        """유형·시도·시군구·계약일이 모두 맞는 매매만 지역명 붙은 주소와 함께 주고, 해제 거래는 해제일도 준다."""
         response = await client.get(SALES_URL, params=REQUIRED_PARAMS)
 
         assert response.status_code == 200
@@ -152,6 +153,7 @@ class TestGetSalePropTransactions:
                 "deal_date": "2026-02-27",
                 "deal_amount": 1_500_000_000,
                 "dealing_type": "중개거래",
+                "cancel_deal_date": None,
                 "house_type": None,
                 "building_name": "역삼래미안",
                 "apartment_dong": "101",
@@ -170,6 +172,7 @@ class TestGetSalePropTransactions:
                 "deal_date": "2026-02-27",
                 "deal_amount": 1_200_000_000,
                 "dealing_type": "중개거래",
+                "cancel_deal_date": None,
                 "house_type": None,
                 "building_name": "역삼래미안",
                 "apartment_dong": "101",
@@ -181,13 +184,32 @@ class TestGetSalePropTransactions:
                 "land_area": None,
                 "address": "서울특별시 강남구 역삼동 123-5",
             },
+            {
+                "id": seed["cancelled"].id,
+                "property_type": "APT",
+                "complex_id": complexes["apartment"].id,
+                "deal_date": "2026-02-27",
+                "deal_amount": 1_500_000_000,
+                "dealing_type": "중개거래",
+                "cancel_deal_date": "2026-03-05",
+                "house_type": None,
+                "building_name": "역삼래미안",
+                "apartment_dong": "101",
+                "floor": 10,
+                "build_year": 2005,
+                "exclusive_use_area": 84.97,
+                "total_floor_area": None,
+                "plottage_area": None,
+                "land_area": None,
+                "address": "서울특별시 강남구 역삼동 123-6",
+            },
         ]
 
     async def test_paginates_by_limit_and_offset(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
         """limit·offset만큼 잘라 id 오름차순으로 준다."""
-        ids = sorted(seed[name].id for name in ("target", "same_day"))
+        ids = sorted(seed[name].id for name in ("target", "same_day", "cancelled"))
         params = REQUIRED_PARAMS | {"limit": 1, "offset": 1}
 
         response = await client.get(SALES_URL, params=params)
@@ -457,6 +479,7 @@ class TestGetSalePropTransactionDetail:
                 "deal_date": "2026-02-27",
                 "deal_amount": 1_500_000_000,
                 "dealing_type": "중개거래",
+                "cancel_deal_date": None,
                 "house_type": None,
                 "building_name": "역삼래미안",
                 "apartment_dong": "101",
