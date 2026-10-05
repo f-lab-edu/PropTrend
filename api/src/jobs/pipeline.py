@@ -114,7 +114,8 @@ PIPELINES: tuple[PipelineSpec, ...] = (
     SaleSpec(
         "아파트 매매",
         PropertyType.APT,
-        f"{RTMS_API}/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade",
+        # 단지 일련번호(aptSeq)는 상세 자료 API에만 있다. 나머지 필드는 기본 API와 같다(apart-sale-detail.md).
+        f"{RTMS_API}/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev",
         "apart_sale",
         "aptNm",
     ),

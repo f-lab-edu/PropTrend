@@ -59,6 +59,12 @@ def test_sale_short_date_is_parsed(value: str, expected: date | None) -> None:
     assert sale(cdealDay=value)["cancel_deal_date"] == expected
 
 
+@pytest.mark.parametrize(("value", "expected"), [("11110-2339", "11110-2339"), (" ", None), (None, None)])
+def test_sale_apartment_serial_number_is_kept(value: str | None, expected: str | None) -> None:
+    # 상세 자료 API의 aptSeq를 옮긴다. 기본 API로 받은 bronze에는 키가 없어 NULL이 된다.
+    assert sale(aptSeq=value)["apartment_serial_number"] == expected
+
+
 def test_rent_amounts_become_won() -> None:
     row = rent(deposit="30,000", monthlyRent="150")
 

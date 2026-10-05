@@ -98,6 +98,7 @@ class SalePreprocessor(RawTablePreprocessor):
             "apartment_dong": _text(row.get("aptDong")),
             "land_leasehold_type": _text(row.get("landLeaseholdGbn")),
             "sigungu_name": _text(row.get("sggNm")),
+            "apartment_serial_number": _text(row.get("aptSeq")),
         }
 
 

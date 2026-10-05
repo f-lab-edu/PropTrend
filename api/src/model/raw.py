@@ -77,6 +77,19 @@ RTMS_KNOWN_FIELDS: dict[str, frozenset[str]] = {
             "slerGbn",
             "buyerGbn",
             "landLeaseholdGbn",
+            # 상세 자료 API(RTMSDataSvcAptTradeDev)에만 있는 필드.
+            "aptSeq",
+            "umdCd",
+            "landCd",
+            "bonbun",
+            "bubun",
+            "roadNm",
+            "roadNmSggCd",
+            "roadNmCd",
+            "roadNmSeq",
+            "roadNmbCd",
+            "roadNmBonbun",
+            "roadNmBubun",
         }
     ),
     "apart_rent": frozenset(
