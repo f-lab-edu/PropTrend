@@ -2,9 +2,10 @@
 
 ## Command
 
-- 코드 포맷팅: `ruff format .`
-- 코드 린팅: `ruff check --fix .`
+- 코드 포맷팅: `uv run ruff format .`
+- 코드 린팅: `uv run ruff check --fix .`
 - 전체 검사(포맷·린트·중복): `./lint.sh` — SonarCloud 봇이 PR에서 보는 항목을 미리 확인합니다.
+- 테스트: `uv run pytest`
 
 ## Coding convention
 
@@ -16,6 +17,7 @@
 - 시드 데이터 생성은 공통 데이터 빌더 함수를 기반으로 생성합니다.
 - 데이터베이스 세션 객체를 통한 트랜잭션 관리는 라우터 함수 계층에서 `async with session.begin():`로 관리합니다.
 - 예외 처리는 FastAPI exception_handler로 전역 관리합니다. 그러므로 특별히 요구된 상황 외에는 모든 예외를 라우터 계층 바깥으로 내보냅니다.
+- API에 대한 업데이트 진행 시 테스트 코드 변경이 필요한 경우 즉시 진행하지 않고, 어떤 부분에 어떻게 변경이 필요한지 확인을 받은 후 진행합니다.
 
 ## Document convention
 
