@@ -17,6 +17,7 @@ from .exception_handlers import (
 from .exceptions import PropTrendError
 from .logging_config import configure_logging
 from .middlewares import RequestIdFilter, log_requests
+from .routers.market import router as market_router
 from .routers.prop_transaction import router as prop_transaction_router
 from .routers.user import router as user_router
 
@@ -56,6 +57,7 @@ app.include_router(
     tags=["prop_transaction"],
 )
 app.include_router(user_router, prefix="/api/users", tags=["user"])
+app.include_router(market_router, prefix="/api/market", tags=["market"])
 
 
 @app.get("/health")

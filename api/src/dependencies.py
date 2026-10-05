@@ -1,7 +1,9 @@
 """라우터가 공유하는 의존성"""
 
 from collections.abc import AsyncIterator
+from datetime import date, datetime
 from typing import Annotated
+from zoneinfo import ZoneInfo
 
 from fastapi import Depends, Security
 from fastapi.security import APIKeyCookie
@@ -12,6 +14,9 @@ from .model.user import User
 from .services.user import get_user_by_session_token
 
 SESSION_COOKIE_NAME = "session_id"
+
+# 실거래 계약일은 한국 날짜라 서버 시간대와 관계없이 KST로 오늘을 정한다.
+SERVICE_TIMEZONE = ZoneInfo("Asia/Seoul")
 
 # auto_error를 끄고 직접 예외를 올려 다른 오류와 같은 응답 구조로 내보낸다.
 session_cookie = APIKeyCookie(name=SESSION_COOKIE_NAME, auto_error=False)
@@ -33,3 +38,8 @@ async def get_current_user(
     # 라우터는 같은 세션으로 자기 트랜잭션을 새로 열 수 있다.
     async with session.begin():
         return await get_user_by_session_token(session, token)
+
+
+def get_today() -> date:
+    """서비스 기준(KST) 오늘 날짜."""
+    return datetime.now(SERVICE_TIMEZONE).date()

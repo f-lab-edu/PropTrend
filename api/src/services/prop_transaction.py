@@ -41,7 +41,7 @@ _region_names: dict[tuple[str, str], str] = {}
 _region_names_loaded_at: float | None = None
 
 
-async def _get_region_names(session: AsyncSession) -> dict[tuple[str, str], str]:
+async def get_region_names(session: AsyncSession) -> dict[tuple[str, str], str]:
     """(시도코드, 시군구코드) → 지역명("서울특별시 강남구") 매핑. TTL 동안 메모리에 캐시한다."""
     global _region_names, _region_names_loaded_at
     if _region_names_loaded_at is not None and time.monotonic() - _region_names_loaded_at < REGION_NAME_TTL_SECONDS:
@@ -58,7 +58,7 @@ async def _get_region_names(session: AsyncSession) -> dict[tuple[str, str], str]
     return names
 
 
-def _build_sale_response_with_region_name(
+def build_sale_response_with_region_name(
     transaction: SaleTransaction, names: dict[tuple[str, str], str]
 ) -> SalePropTransactionResponse:
     """매매 ORM 행을 응답 스키마로 바꾸고 캐시에서 찾은 지역명을 채운다."""
@@ -91,8 +91,8 @@ async def get_sale_transactions(
     result = await session.execute(
         select(SaleTransaction).where(*conditions).order_by(SaleTransaction.id).limit(query.limit).offset(query.offset)
     )
-    names = await _get_region_names(session)
-    return [_build_sale_response_with_region_name(transaction, names) for transaction in result.scalars()]
+    names = await get_region_names(session)
+    return [build_sale_response_with_region_name(transaction, names) for transaction in result.scalars()]
 
 
 async def get_rent_transactions(
@@ -110,7 +110,7 @@ async def get_rent_transactions(
     result = await session.execute(
         select(RentTransaction).where(*conditions).order_by(RentTransaction.id).limit(query.limit).offset(query.offset)
     )
-    names = await _get_region_names(session)
+    names = await get_region_names(session)
     return [_build_rent_response_with_region_name(transaction, names) for transaction in result.scalars()]
 
 
@@ -120,8 +120,8 @@ async def get_sale_transaction_detail(session: AsyncSession, transaction_id: int
     if transaction is None:
         raise TransactionNotFoundError("실거래를 찾을 수 없습니다")
 
-    names = await _get_region_names(session)
-    base_transaction = _build_sale_response_with_region_name(transaction, names)
+    names = await get_region_names(session)
+    base_transaction = build_sale_response_with_region_name(transaction, names)
     group_columns = PRICE_TREND_GROUP_COLUMNS.get(transaction.property_type)
     if group_columns is None:
         return SalePropTransactionDetailResponse(base_transaction=base_transaction, trend=None)
@@ -153,7 +153,7 @@ async def get_rent_transaction_detail(session: AsyncSession, transaction_id: int
     if transaction is None:
         raise TransactionNotFoundError("실거래를 찾을 수 없습니다")
 
-    names = await _get_region_names(session)
+    names = await get_region_names(session)
     base_transaction = _build_rent_response_with_region_name(transaction, names)
     group_columns = PRICE_TREND_GROUP_COLUMNS.get(transaction.property_type)
     if group_columns is None:
