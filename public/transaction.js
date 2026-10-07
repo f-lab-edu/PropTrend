@@ -324,7 +324,7 @@ async function main() {
       return;
     }
     renderSummary(dealType, body.base_transaction);
-    renderFavorite(body.base_transaction.complex_id);
+    renderFavorite(body.base_transaction.complex_id).catch(console.error);
     document.getElementById("detail").classList.remove("hidden");
     renderTrend(dealType, body);
   } catch (error) {
