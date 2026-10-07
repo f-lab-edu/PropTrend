@@ -47,7 +47,8 @@ async def add_favorite_complex_route(
 ) -> FavoriteComplexAddResponse:
     """단지 즐겨찾기를 추가한다."""
     async with session.begin():
-        return await add_favorite_complex(session, user_id=user.id, complex_id=body.complex_id)
+        await add_favorite_complex(session, user_id=user.id, complex_id=body.complex_id)
+    return FavoriteComplexAddResponse(complex_id=body.complex_id)
 
 
 @router.delete(

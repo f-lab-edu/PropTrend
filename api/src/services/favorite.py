@@ -5,11 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..exceptions import ComplexNotFoundError
 from ..model.complex import Complex
 from ..model.favorite import FavoriteComplex
-from ..schemas.favorite import FavoriteComplexAddResponse, FavoriteComplexResponse
+from ..schemas.favorite import FavoriteComplexResponse
 from .prop_transaction import get_region_names
 
 
-async def add_favorite_complex(session: AsyncSession, *, user_id: int, complex_id: int) -> FavoriteComplexAddResponse:
+async def add_favorite_complex(session: AsyncSession, *, user_id: int, complex_id: int) -> None:
     """사용자의 단지 즐겨찾기를 추가한다. 이미 있으면 그대로 둔다."""
     if await session.get(Complex, complex_id) is None:
         raise ComplexNotFoundError("단지를 찾을 수 없습니다")
@@ -18,7 +18,6 @@ async def add_favorite_complex(session: AsyncSession, *, user_id: int, complex_i
     await session.execute(
         insert(FavoriteComplex).values(user_id=user_id, complex_id=complex_id).on_conflict_do_nothing()
     )
-    return FavoriteComplexAddResponse(complex_id=complex_id)
 
 
 async def remove_favorite_complex(session: AsyncSession, *, user_id: int, complex_id: int) -> None:

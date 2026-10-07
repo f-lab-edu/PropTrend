@@ -11,7 +11,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..exceptions import DuplicateEmailError, InvalidCredentialsError, UnauthenticatedError
 from ..model.user import User, UserSession
-from ..schemas.user import UserResponse
 
 # Argon2id. 파라미터는 라이브러리 기본값(RFC 9106 저메모리 권장값: m=64MiB, t=3, p=4)을 쓴다.
 password_hasher = PasswordHasher()
@@ -29,7 +28,7 @@ def hash_session_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 
 
-async def create_user(session: AsyncSession, *, email: str, nickname: str, password: str) -> UserResponse:
+async def create_user(session: AsyncSession, *, email: str, nickname: str, password: str) -> User:
     """요청 데이터로 사용자를 생성한다."""
     # 해싱은 수십 ms 걸리는 CPU 작업이라 이벤트 루프를 막지 않도록 스레드에서 돌린다.
     hashed_password = await asyncio.to_thread(password_hasher.hash, password)
@@ -40,7 +39,7 @@ async def create_user(session: AsyncSession, *, email: str, nickname: str, passw
         await session.flush()
     except IntegrityError as e:
         raise DuplicateEmailError("이미 가입된 이메일입니다") from e
-    return UserResponse.model_validate(user)
+    return user
 
 
 async def authenticate_user(session: AsyncSession, *, email: str, password: str) -> User:
