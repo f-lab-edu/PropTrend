@@ -1,7 +1,7 @@
 import time
 from collections.abc import Sequence
 
-from sqlalchemy import select, tuple_
+from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..exceptions import TransactionNotFoundError
@@ -12,9 +12,11 @@ from ..model.raw import LegalDongCodeRawItem
 from ..schemas.prop_transaction import (
     RentPriceTrendPoint,
     RentPropTransactionDetailResponse,
+    RentPropTransactionListResponse,
     RentPropTransactionResponse,
     SalePriceTrendPoint,
     SalePropTransactionDetailResponse,
+    SalePropTransactionListResponse,
     SalePropTransactionResponse,
 )
 
@@ -120,7 +122,7 @@ async def get_sale_transactions(
     deal_ymd: str,
     limit: int,
     offset: int,
-) -> list[SalePropTransactionResponse]:
+) -> SalePropTransactionListResponse:
     """조건에 맞는 매매 실거래 목록을 조회한다."""
     start, end = month_range(deal_ymd)
     conditions = [
@@ -131,6 +133,7 @@ async def get_sale_transactions(
         SaleTransaction.deal_date < end,
     ]
 
+    total = (await session.execute(select(func.count()).select_from(SaleTransaction).where(*conditions))).scalar_one()
     # 페이지 경계가 요청마다 달라지지 않도록 id 순으로 고정한다.
     result = await session.execute(
         select(SaleTransaction).where(*conditions).order_by(SaleTransaction.id).limit(limit).offset(offset)
@@ -138,7 +141,12 @@ async def get_sale_transactions(
     transactions = list(result.scalars())
     names = await get_region_names(session)
     complex_ids = await get_complex_ids(session, transactions=transactions)
-    return [build_sale_response(transaction, names, complex_ids) for transaction in transactions]
+    return SalePropTransactionListResponse(
+        items=[build_sale_response(transaction, names, complex_ids) for transaction in transactions],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 async def get_rent_transactions(
@@ -150,7 +158,7 @@ async def get_rent_transactions(
     deal_ymd: str,
     limit: int,
     offset: int,
-) -> list[RentPropTransactionResponse]:
+) -> RentPropTransactionListResponse:
     """조건에 맞는 전월세 실거래 목록을 조회한다."""
     start, end = month_range(deal_ymd)
     conditions = [
@@ -161,6 +169,7 @@ async def get_rent_transactions(
         RentTransaction.deal_date < end,
     ]
 
+    total = (await session.execute(select(func.count()).select_from(RentTransaction).where(*conditions))).scalar_one()
     # 페이지 경계가 요청마다 달라지지 않도록 id 순으로 고정한다.
     result = await session.execute(
         select(RentTransaction).where(*conditions).order_by(RentTransaction.id).limit(limit).offset(offset)
@@ -168,7 +177,12 @@ async def get_rent_transactions(
     transactions = list(result.scalars())
     names = await get_region_names(session)
     complex_ids = await get_complex_ids(session, transactions=transactions)
-    return [_build_rent_response(transaction, names, complex_ids) for transaction in transactions]
+    return RentPropTransactionListResponse(
+        items=[_build_rent_response(transaction, names, complex_ids) for transaction in transactions],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
 
 
 async def get_sale_transaction_detail(

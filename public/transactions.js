@@ -71,7 +71,7 @@ async function renderSummary(filters) {
   let region = `${sido_code}${sigungu_code}`;
   try {
     const response = await fetch("/api/regions");
-    const sido = response.ok ? (await response.json()).find((item) => item.sido_code === sido_code) : undefined;
+    const sido = response.ok ? (await response.json()).items.find((item) => item.sido_code === sido_code) : undefined;
     const sigungu = sido?.sigungus.find((item) => item.sigungu_code === sigungu_code);
     // 세종특별자치시처럼 시군구명이 시도명과 같으면 한 번만 쓴다.
     if (sigungu) {
@@ -88,13 +88,12 @@ async function renderSummary(filters) {
 
 async function loadTransactions(filters, page) {
   const { property_type, deal_type, sido_code, sigungu_code, deal_ymd } = filters;
-  // 전체 건수를 주지 않는 API라 한 행을 더 받아 다음 페이지가 있는지만 판단한다.
   const query = new URLSearchParams({
     property_type,
     sido_code,
     sigungu_code,
     deal_ymd,
-    limit: PAGE_SIZE + 1,
+    limit: PAGE_SIZE,
     offset: (page - 1) * PAGE_SIZE,
   });
   try {
@@ -104,14 +103,14 @@ async function loadTransactions(filters, page) {
       showMessage(message, body.message ?? "실거래 목록을 불러오지 못했습니다.");
       return;
     }
-    if (body.length === 0) {
+    if (body.items.length === 0) {
       showMessage(message, "조건에 맞는 거래가 없습니다.");
     } else {
       const { byType, price, terms } = COLUMNS[deal_type];
       const columns = [DEAL_DATE, ADDRESS, ...byType[property_type], ...price, ...terms];
-      renderTable(deal_type, columns, body.slice(0, PAGE_SIZE));
+      renderTable(deal_type, columns, body.items);
     }
-    renderPagination(page, body.length > PAGE_SIZE);
+    renderPagination(page, page * PAGE_SIZE < body.total);
   } catch (error) {
     console.error(error);
     showMessage(message, "실거래 목록을 불러오지 못했습니다. 잠시 후 다시 시도하세요.");

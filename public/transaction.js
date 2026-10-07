@@ -265,7 +265,7 @@ async function renderFavorite(complexId) {
     if (await fetchMe()) {
       const response = await fetch("/api/favorites/complexes");
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      favorite = (await response.json()).some((item) => item.complex_id === complexId);
+      favorite = (await response.json()).items.some((item) => item.complex_id === complexId);
     }
   } catch (error) {
     console.error(error);

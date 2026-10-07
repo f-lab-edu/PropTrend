@@ -40,7 +40,7 @@ async function loadRegions() {
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}`);
     }
-    const sidos = await response.json();
+    const { items: sidos } = await response.json();
     if (sidos.length === 0) {
       fillOptions(sidoSelect, "지역 없음", []);
       showMessage("아직 지역 목록이 적재되지 않았습니다.");

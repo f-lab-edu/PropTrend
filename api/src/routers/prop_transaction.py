@@ -7,9 +7,9 @@ from ..dependencies import get_session
 from ..schemas.prop_transaction import (
     PropTransactionQuery,
     RentPropTransactionDetailResponse,
-    RentPropTransactionResponse,
+    RentPropTransactionListResponse,
     SalePropTransactionDetailResponse,
-    SalePropTransactionResponse,
+    SalePropTransactionListResponse,
 )
 from ..services.prop_transaction import (
     get_rent_transaction_detail,
@@ -35,13 +35,14 @@ router = APIRouter()
         "- `deal_amount`의 단위는 원입니다.\n"
         "- `cancel_deal_date`는 해제된 거래의 해제일이며, 해제되지 않았으면 `null`입니다.\n"
         "- 부동산 유형에 해당하지 않는 필드는 `null`로 응답합니다.\n"
-        "- 결과는 `id` 오름차순이며 `limit`(기본 100, 최대 1000)과 `offset`으로 페이지를 나눕니다."
+        "- 결과는 `id` 오름차순이며 `limit`(기본 100, 최대 1000)과 `offset`으로 페이지를 나눕니다.\n"
+        "- `total`은 `limit`, `offset`과 상관없이 조회 조건에 맞는 전체 거래 수입니다."
     ),
 )
 async def get_sale_prop_transactions(
     query: Annotated[PropTransactionQuery, Query()],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> list[SalePropTransactionResponse]:
+) -> SalePropTransactionListResponse:
     """매매 실거래 목록을 조회한다."""
     async with session.begin():
         return await get_sale_transactions(
@@ -68,13 +69,14 @@ async def get_sale_prop_transactions(
         "연립다세대·단독다가구는 `null`입니다.\n"
         "- `deposit`, `monthly_rent`의 단위는 원입니다. `monthly_rent`가 0이면 전세 거래입니다.\n"
         "- 부동산 유형에 해당하지 않는 필드는 `null`로 응답합니다.\n"
-        "- 결과는 `id` 오름차순이며 `limit`(기본 100, 최대 1000)과 `offset`으로 페이지를 나눕니다."
+        "- 결과는 `id` 오름차순이며 `limit`(기본 100, 최대 1000)과 `offset`으로 페이지를 나눕니다.\n"
+        "- `total`은 `limit`, `offset`과 상관없이 조회 조건에 맞는 전체 거래 수입니다."
     ),
 )
 async def get_rent_prop_transactions(
     query: Annotated[PropTransactionQuery, Query()],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> list[RentPropTransactionResponse]:
+) -> RentPropTransactionListResponse:
     """전월세 실거래 목록을 조회한다."""
     async with session.begin():
         return await get_rent_transactions(

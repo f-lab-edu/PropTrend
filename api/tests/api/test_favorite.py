@@ -288,10 +288,10 @@ class TestListFavoriteComplexes:
         async with seed_rows(session_factory, FavoriteComplex, rows):
             response = await client.get(FAVORITE_COMPLEXES_URL, headers=session_cookie_header(TOKEN))
 
-        body = response.json()
+        items = response.json()["items"]
         assert response.status_code == 200
-        assert [datetime.fromisoformat(item.pop("favorited_at")) for item in body] == [officetel_at, apartment_at]
-        assert body == [
+        assert [datetime.fromisoformat(item.pop("favorited_at")) for item in items] == [officetel_at, apartment_at]
+        assert items == [
             {
                 "complex_id": officetel.id,
                 "property_type": "OFFICETEL",
@@ -313,7 +313,7 @@ class TestListFavoriteComplexes:
         response = await client.get(FAVORITE_COMPLEXES_URL, headers=session_cookie_header(TOKEN))
 
         assert response.status_code == 200
-        assert response.json() == []
+        assert response.json() == {"items": []}
 
     @pytest.mark.parametrize("headers", UNAUTHENTICATED_HEADERS)
     async def test_rejects_unauthenticated(

@@ -39,7 +39,7 @@ class TestGetRegions:
         response = await client.get(REGIONS_URL)
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json() == []
+        assert response.json() == {"items": []}
 
     @pytest.mark.usefixtures("seed")
     async def test_returns_sigungus_grouped_by_sido(self, client: httpx.AsyncClient) -> None:
@@ -47,21 +47,23 @@ class TestGetRegions:
         response = await client.get(REGIONS_URL)
 
         assert response.status_code == status.HTTP_200_OK
-        assert response.json() == [
-            {
-                "sido_code": "11",
-                "sido_name": "서울특별시",
-                "sigungus": [
-                    {"sigungu_code": "110", "sigungu_name": "종로구"},
-                    {"sigungu_code": "710", "sigungu_name": "송파구"},
-                ],
-            },
-            {
-                "sido_code": "41",
-                "sido_name": "경기도",
-                "sigungus": [
-                    {"sigungu_code": "111", "sigungu_name": "수원시 장안구"},
-                    {"sigungu_code": "113", "sigungu_name": "수원시 권선구"},
-                ],
-            },
-        ]
+        assert response.json() == {
+            "items": [
+                {
+                    "sido_code": "11",
+                    "sido_name": "서울특별시",
+                    "sigungus": [
+                        {"sigungu_code": "110", "sigungu_name": "종로구"},
+                        {"sigungu_code": "710", "sigungu_name": "송파구"},
+                    ],
+                },
+                {
+                    "sido_code": "41",
+                    "sido_name": "경기도",
+                    "sigungus": [
+                        {"sigungu_code": "111", "sigungu_name": "수원시 장안구"},
+                        {"sigungu_code": "113", "sigungu_name": "수원시 권선구"},
+                    ],
+                },
+            ]
+        }

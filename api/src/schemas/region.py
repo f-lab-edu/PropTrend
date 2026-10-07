@@ -1,4 +1,4 @@
-from . import PropTrendCoreModel
+from . import ListResponse, PropTrendCoreModel
 
 
 class SigunguResponse(PropTrendCoreModel):
@@ -14,3 +14,9 @@ class SidoResponse(PropTrendCoreModel):
     sido_code: str
     sido_name: str
     sigungus: list[SigunguResponse]
+
+
+class RegionListResponse(ListResponse):
+    """시도별로 묶은 지역 목록."""
+
+    items: list[SidoResponse]

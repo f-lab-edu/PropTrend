@@ -5,7 +5,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..dependencies import get_current_user, get_session
 from ..model.user import User
-from ..schemas.favorite import FavoriteComplexAddRequest, FavoriteComplexAddResponse, FavoriteComplexResponse
+from ..schemas.favorite import (
+    FavoriteComplexAddRequest,
+    FavoriteComplexAddResponse,
+    FavoriteComplexListResponse,
+)
 from ..services.favorite import add_favorite_complex, get_favorite_complexes, remove_favorite_complex
 
 router = APIRouter()
@@ -16,17 +20,17 @@ router = APIRouter()
     summary="즐겨찾기한 단지 목록 조회",
     description=(
         "로그인한 사용자가 즐겨찾기한 단지를 최근에 추가한 순으로 반환합니다.\n\n"
-        "- 즐겨찾기한 단지가 없으면 빈 목록을 반환합니다.\n"
+        "- 즐겨찾기한 단지가 없으면 `items`가 빈 목록입니다.\n"
         "- 쿠키가 없거나 세션이 만료·삭제되었으면 401을 반환합니다."
     ),
 )
 async def get_favorite_complexes_route(
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> list[FavoriteComplexResponse]:
+) -> FavoriteComplexListResponse:
     """즐겨찾기한 단지 목록을 조회한다."""
     async with session.begin():
-        return await get_favorite_complexes(session, user_id=user.id)
+        return FavoriteComplexListResponse(items=await get_favorite_complexes(session, user_id=user.id))
 
 
 @router.post(

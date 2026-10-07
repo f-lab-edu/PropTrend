@@ -68,7 +68,7 @@ async function loadFavorites() {
   try {
     const response = await fetch("/api/favorites/complexes");
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const items = await response.json();
+    const { items } = await response.json();
     favoriteList.replaceChildren(...items.map(favoriteItem));
     if (items.length === 0) showEmptyFavorites();
   } catch (error) {

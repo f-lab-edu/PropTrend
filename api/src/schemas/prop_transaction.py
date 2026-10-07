@@ -3,7 +3,7 @@ from datetime import date
 from pydantic import Field, computed_field
 
 from ..model.prop_transaction import PropertyType
-from . import PropTrendCoreModel
+from . import PageResponse, PropTrendCoreModel
 
 
 class PropTransactionQuery(PropTrendCoreModel):
@@ -82,6 +82,18 @@ class RentPropTransactionResponse(AddressResponse):
     build_year: int | None = None  # 모든 유형 (일부 행은 비어 있음)
     exclusive_use_area: float | None = None  # 아파트, 연립다세대, 오피스텔
     total_floor_area: float | None = None  # 단독다가구
+
+
+class SalePropTransactionListResponse(PageResponse):
+    """매매 실거래 목록 한 페이지."""
+
+    items: list[SalePropTransactionResponse]
+
+
+class RentPropTransactionListResponse(PageResponse):
+    """전월세 실거래 목록 한 페이지."""
+
+    items: list[RentPropTransactionResponse]
 
 
 class SalePriceTrendPoint(PropTrendCoreModel):

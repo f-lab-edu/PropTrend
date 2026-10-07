@@ -3,7 +3,7 @@ from datetime import datetime
 from pydantic import Field
 
 from ..model.prop_transaction import PropertyType
-from . import PropTrendCoreModel
+from . import ListResponse, PropTrendCoreModel
 from .prop_transaction import AddressResponse
 
 
@@ -27,3 +27,9 @@ class FavoriteComplexResponse(AddressResponse):
     building_name: str | None
     build_year: int | None
     favorited_at: datetime
+
+
+class FavoriteComplexListResponse(ListResponse):
+    """즐겨찾기한 단지 목록."""
+
+    items: list[FavoriteComplexResponse]

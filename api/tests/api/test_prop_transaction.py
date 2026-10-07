@@ -147,8 +147,10 @@ class TestGetSalePropTransactions:
         """유형·시도·시군구·계약년월이 모두 맞는 매매만 지역명 붙은 주소와 함께 주고, 해제 거래는 해제일도 준다."""
         response = await client.get(SALES_URL, params=REQUIRED_PARAMS)
 
+        body = response.json()
         assert response.status_code == 200
-        assert sorted(response.json(), key=lambda item: item["id"]) == [
+        assert (body["total"], body["limit"], body["offset"]) == (3, 100, 0)
+        assert sorted(body["items"], key=lambda item: item["id"]) == [
             {
                 "id": seed["target"].id,
                 "property_type": "APT",
@@ -211,14 +213,16 @@ class TestGetSalePropTransactions:
     async def test_paginates_by_limit_and_offset(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
-        """limit·offset만큼 잘라 id 오름차순으로 준다."""
+        """limit·offset만큼 잘라 id 오름차순으로 주고, total은 자르기 전 전체 건수로 준다."""
         ids = sorted(seed[name].id for name in ("target", "same_month", "cancelled"))
         params = REQUIRED_PARAMS | {"limit": 1, "offset": 1}
 
         response = await client.get(SALES_URL, params=params)
 
+        body = response.json()
         assert response.status_code == 200
-        assert [item["id"] for item in response.json()] == ids[1:2]
+        assert [item["id"] for item in body["items"]] == ids[1:2]
+        assert (body["total"], body["limit"], body["offset"]) == (len(ids), 1, 1)
 
     async def test_omits_region_name_when_legal_dong_code_missing(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
@@ -229,7 +233,7 @@ class TestGetSalePropTransactions:
         response = await client.get(SALES_URL, params=params)
 
         assert response.status_code == 200
-        assert [(item["id"], item["address"]) for item in response.json()] == [
+        assert [(item["id"], item["address"]) for item in response.json()["items"]] == [
             (seed["unknown_region"].id, "개포동 1-1")
         ]
 
@@ -279,8 +283,10 @@ class TestGetRentPropTransactions:
         """유형·시도·시군구·계약년월이 모두 맞는 전세·월세를 지역명을 붙인 주소와 함께 준다."""
         response = await client.get(RENTS_URL, params=REQUIRED_PARAMS)
 
+        body = response.json()
         assert response.status_code == 200
-        assert sorted(response.json(), key=lambda item: item["id"]) == [
+        assert (body["total"], body["limit"], body["offset"]) == (2, 100, 0)
+        assert sorted(body["items"], key=lambda item: item["id"]) == [
             {
                 "id": seed["target"].id,
                 "property_type": "APT",
@@ -320,14 +326,16 @@ class TestGetRentPropTransactions:
     async def test_paginates_by_limit_and_offset(
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
     ) -> None:
-        """limit·offset만큼 잘라 id 오름차순으로 준다."""
+        """limit·offset만큼 잘라 id 오름차순으로 주고, total은 자르기 전 전체 건수로 준다."""
         ids = sorted(seed[name].id for name in ("target", "monthly"))
         params = REQUIRED_PARAMS | {"limit": 1, "offset": 1}
 
         response = await client.get(RENTS_URL, params=params)
 
+        body = response.json()
         assert response.status_code == 200
-        assert [item["id"] for item in response.json()] == ids[1:2]
+        assert [item["id"] for item in body["items"]] == ids[1:2]
+        assert (body["total"], body["limit"], body["offset"]) == (len(ids), 1, 1)
 
     async def test_omits_region_name_when_legal_dong_code_missing(
         self, client: httpx.AsyncClient, seed: dict[str, RentTransaction]
@@ -338,7 +346,7 @@ class TestGetRentPropTransactions:
         response = await client.get(RENTS_URL, params=params)
 
         assert response.status_code == 200
-        assert [(item["id"], item["address"]) for item in response.json()] == [
+        assert [(item["id"], item["address"]) for item in response.json()["items"]] == [
             (seed["unknown_region"].id, "개포동 1-1")
         ]
 
