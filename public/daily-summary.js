@@ -1,4 +1,4 @@
-import { PROPERTY_TYPE_LABELS, element, formatArea, formatDate, formatWon, transactionTitle } from "/common.js";
+import { element, formatArea, formatDate, formatWon, transactionTitle } from "/common.js";
 
 const container = document.getElementById("daily-summary");
 const CARD_CLASS = "flex flex-col rounded-xl bg-white p-5 shadow-sm";
@@ -13,7 +13,7 @@ function countCard(count) {
   return card;
 }
 
-// 유형 구분 없이 고른 거래라 최저가는 소형 단독다가구인 경우가 많다. 유형과 면적을 함께 보여줘 어떤 거래인지 알게 한다.
+// 아파트는 전용면적, 주택은 연면적을 함께 보여줘 어떤 규모의 거래인지 알게 한다.
 function saleCard(label, sale) {
   if (sale === null) {
     const card = element("div", CARD_CLASS);
@@ -27,13 +27,6 @@ function saleCard(label, sale) {
   const card = element("a", `${CARD_CLASS} hover:ring-2 hover:ring-blue-200`);
   card.href = `/transaction.html?${new URLSearchParams({ deal_type: "sales", id: sale.id })}`;
 
-  const header = element("div", "flex items-center justify-between");
-  const typeBadge = "rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700";
-  header.append(
-    element("p", "text-sm text-slate-500", label),
-    element("span", typeBadge, PROPERTY_TYPE_LABELS[sale.property_type]),
-  );
-
   const area =
     sale.exclusive_use_area !== null
       ? `전용 ${formatArea(sale.exclusive_use_area)}`
@@ -43,7 +36,7 @@ function saleCard(label, sale) {
   const details = [area, sale.floor === null ? null : `${sale.floor}층`].filter(Boolean).join(" · ");
 
   card.append(
-    header,
+    element("p", "text-sm text-slate-500", label),
     element("p", "mt-2 text-2xl font-bold text-blue-700", formatWon(sale.deal_amount)),
     element("p", "mt-2 font-medium", transactionTitle(sale)),
     element("p", "text-xs text-slate-500", sale.address),
@@ -59,18 +52,25 @@ async function loadDailySummary() {
     const summary = await response.json();
     document.getElementById("daily-summary-title").textContent =
       `일일 실거래 요약 · ${formatDate(summary.deal_date)} 계약`;
-    container.replaceChildren(
-      countCard(summary.transaction_count),
-      saleCard("최고가 매매", summary.highest_sale),
-      saleCard("최저가 매매", summary.lowest_sale),
-    );
+    for (const [id, group] of [
+      ["daily-summary-apartment", summary.apartment],
+      ["daily-summary-single-multi", summary.single_multi],
+    ]) {
+      document
+        .getElementById(id)
+        .replaceChildren(
+          countCard(group.transaction_count),
+          saleCard("최고가 매매", group.highest_sale),
+          saleCard("최저가 매매", group.lowest_sale),
+        );
+    }
   } catch (error) {
     // 요약은 부가 정보라 실패해도 검색 폼은 그대로 쓸 수 있게 이 영역에만 안내한다.
     console.error(error);
     container.replaceChildren(
       element(
         "p",
-        "col-span-full rounded-xl bg-white p-6 text-center text-sm text-slate-500 shadow-sm",
+        "rounded-xl bg-white p-6 text-center text-sm text-slate-500 shadow-sm",
         "시장 요약을 불러오지 못했습니다.",
       ),
     );

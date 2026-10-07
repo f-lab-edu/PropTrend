@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction
 from ..schemas.market import (
+    DailySummaryGroup,
     DailySummaryResponse,
     PriceMover,
     PriceMoversResponse,
@@ -30,47 +31,58 @@ VOLUME_SURGE_LIMIT = 5
 
 
 async def get_daily_summary(session: AsyncSession, *, base_date: date) -> DailySummaryResponse:
-    """기준일로부터 신고 기한만큼 앞선 계약일 하루의 매매 최고가·최저가 거래와 전체 거래건수를 조회한다."""
+    """신고 기한만큼 앞선 계약일 하루의 아파트·단독다가구별 매매 최고가·최저가 거래와 거래건수를 조회한다."""
     # 기준일이 월말이어도 깨지지 않도록 PostgreSQL interval 연산으로 구한다(10/31의 1개월 전은 9/30).
     deal_date = await session.scalar(
         select(cast(literal(base_date, Date) - func.make_interval(0, REPORT_DELAY_MONTHS, type_=Interval), Date))
     )
-    # 해제된 거래는 실제로 성사되지 않은 가격이라 최고가·최저가와 건수에서 모두 뺀다.
-    sale_conditions = [
-        SaleTransaction.deal_date == deal_date,
-        SaleTransaction.cancel_deal_type.is_distinct_from("O"),
-    ]
 
-    # 금액이 같으면 응답이 요청마다 달라지지 않도록 id가 작은 거래를 고른다.
-    highest = await session.scalar(
-        select(SaleTransaction)
-        .where(*sale_conditions)
-        .order_by(SaleTransaction.deal_amount.desc(), SaleTransaction.id)
-        .limit(1)
-    )
-    lowest = await session.scalar(
-        select(SaleTransaction)
-        .where(*sale_conditions)
-        .order_by(SaleTransaction.deal_amount, SaleTransaction.id)
-        .limit(1)
-    )
+    rows = {}
+    for property_type in (PropertyType.APT, PropertyType.SINGLE_MULTI):
+        # 해제된 거래는 실제로 성사되지 않은 가격이라 최고가·최저가와 건수에서 모두 뺀다.
+        sale_conditions = [
+            SaleTransaction.property_type == property_type,
+            SaleTransaction.deal_date == deal_date,
+            SaleTransaction.cancel_deal_type.is_distinct_from("O"),
+        ]
+        # 금액이 같으면 응답이 요청마다 달라지지 않도록 id가 작은 거래를 고른다.
+        highest = await session.scalar(
+            select(SaleTransaction)
+            .where(*sale_conditions)
+            .order_by(SaleTransaction.deal_amount.desc(), SaleTransaction.id)
+            .limit(1)
+        )
+        lowest = await session.scalar(
+            select(SaleTransaction)
+            .where(*sale_conditions)
+            .order_by(SaleTransaction.deal_amount, SaleTransaction.id)
+            .limit(1)
+        )
 
-    sale_count = select(func.count()).select_from(SaleTransaction).where(*sale_conditions).scalar_subquery()
-    rent_count = (
-        select(func.count())
-        .select_from(RentTransaction)
-        .where(RentTransaction.deal_date == deal_date)
-        .scalar_subquery()
-    )
-    transaction_count = await session.scalar(select(sale_count + rent_count))
+        sale_count = select(func.count()).select_from(SaleTransaction).where(*sale_conditions).scalar_subquery()
+        rent_count = (
+            select(func.count())
+            .select_from(RentTransaction)
+            .where(RentTransaction.property_type == property_type, RentTransaction.deal_date == deal_date)
+            .scalar_subquery()
+        )
+        rows[property_type] = (highest, lowest, await session.scalar(select(sale_count + rent_count)))
 
     names = await get_region_names(session)
-    complex_ids = await get_complex_ids(session, transactions=[sale for sale in (highest, lowest) if sale is not None])
+    sales = [sale for highest, lowest, _ in rows.values() for sale in (highest, lowest) if sale is not None]
+    complex_ids = await get_complex_ids(session, transactions=sales)
+    groups = {
+        property_type: DailySummaryGroup(
+            highest_sale=None if highest is None else build_sale_response(highest, names, complex_ids),
+            lowest_sale=None if lowest is None else build_sale_response(lowest, names, complex_ids),
+            transaction_count=transaction_count,
+        )
+        for property_type, (highest, lowest, transaction_count) in rows.items()
+    }
     return DailySummaryResponse(
         deal_date=deal_date,
-        highest_sale=None if highest is None else build_sale_response(highest, names, complex_ids),
-        lowest_sale=None if lowest is None else build_sale_response(lowest, names, complex_ids),
-        transaction_count=transaction_count,
+        apartment=groups[PropertyType.APT],
+        single_multi=groups[PropertyType.SINGLE_MULTI],
     )
 
 

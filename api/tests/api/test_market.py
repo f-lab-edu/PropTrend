@@ -38,41 +38,49 @@ class TestGetDailySummary:
     @pytest_asyncio.fixture(scope="class", loop_scope="session")
     @classmethod
     async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, SaleTransaction]]:
+        single_multi = SALE_ROW | {
+            "property_type": PropertyType.SINGLE_MULTI,
+            "house_type": "단독",
+            "sido_code": "26",
+            "sigungu_code": "350",
+            "umd_name": "우동",
+            "jibun": "1**",
+            "building_name": None,
+            "apartment_dong": None,
+            "deal_amount": 11_000_000,
+            "exclusive_use_area": None,
+            "floor": None,
+            "build_year": None,
+            "total_floor_area": 120.5,
+            "plottage_area": 200.0,
+        }
         sale_rows = {
-            "highest": SALE_ROW,
+            "apartment_highest": SALE_ROW,
             # 최고가와 금액이 같지만 나중에 넣어 id가 크다.
-            "highest_tie": SALE_ROW | {"jibun": "123-5", "floor": 15},
-            "middle": SALE_ROW | {"property_type": PropertyType.OFFICETEL, "deal_amount": 500_000_000},
-            "lowest": SALE_ROW
-            | {
-                "property_type": PropertyType.SINGLE_MULTI,
-                "house_type": "단독",
-                "sido_code": "26",
-                "sigungu_code": "350",
-                "umd_name": "우동",
-                "jibun": "1**",
-                "building_name": None,
-                "apartment_dong": None,
-                "deal_amount": 11_000_000,
-                "exclusive_use_area": None,
-                "floor": None,
-                "build_year": None,
-                "total_floor_area": 120.5,
-                "plottage_area": 200.0,
-            },
+            "apartment_highest_tie": SALE_ROW | {"jibun": "123-5", "floor": 15},
+            "apartment_lowest": SALE_ROW | {"deal_amount": 900_000_000, "floor": 3},
+            "single_multi_highest": single_multi
+            | {"jibun": "2**", "deal_amount": 800_000_000, "total_floor_area": 250.0, "plottage_area": 300.0},
+            "single_multi_lowest": single_multi,
+            # 집계 대상이 아닌 유형은 금액이 가장 크거나 작아도 고르지 않는다.
+            "officetel": SALE_ROW | {"property_type": PropertyType.OFFICETEL, "deal_amount": 10_000_000_000},
+            "row_house": SALE_ROW | {"property_type": PropertyType.ROW_HOUSE, "deal_amount": 5_000_000},
             "cancelled_high": SALE_ROW | {"deal_amount": 9_000_000_000, "cancel_deal_type": "O"},
-            "cancelled_low": SALE_ROW | {"deal_amount": 1_000_000, "cancel_deal_type": "O"},
+            "cancelled_low": single_multi | {"deal_amount": 1_000_000, "cancel_deal_type": "O"},
             "day_before": SALE_ROW | {"deal_date": date(2026, 10, 3), "deal_amount": 8_000_000_000},
             "day_after": SALE_ROW | {"deal_date": date(2026, 10, 5), "deal_amount": 2_000_000},
         }
         rent_rows = [
             RENT_ROW,
+            RENT_ROW | {"property_type": PropertyType.SINGLE_MULTI, "deposit": 200_000_000},
+            RENT_ROW | {"property_type": PropertyType.OFFICETEL, "deposit": 300_000_000},
             RENT_ROW | {"property_type": PropertyType.ROW_HOUSE, "deposit": 10_000_000, "monthly_rent": 500_000},
             RENT_ROW | {"deal_date": date(2026, 10, 3)},
             RENT_ROW | {"deal_date": date(2026, 10, 5)},
             # 매매 없이 전월세만 있는 날.
             RENT_ROW | {"deal_date": date(2026, 10, 2)},
             RENT_ROW | {"deal_date": date(2026, 10, 2), "monthly_rent": 1_000_000},
+            RENT_ROW | {"deal_date": date(2026, 10, 2), "property_type": PropertyType.SINGLE_MULTI},
         ]
         async with (
             seed_rows(session_factory, LegalDongCodeRawItem, LEGAL_DONG_CODE_ROWS),
@@ -90,60 +98,81 @@ class TestGetDailySummary:
     async def test_returns_summary_of_month_ago(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
-        """호출일 1개월 전 계약된 매매의 최고가·최저가 거래와 매매·전월세 합계 건수를 해제 거래를 빼고 준다."""
+        """호출일 1개월 전 계약된 거래를 아파트·단독다가구로 나눠 매매 최고가·최저가와 매매·전월세 합계 건수를 준다.
+
+        오피스텔·연립다세대와 해제된 매매는 뺀다.
+        """
         app.dependency_overrides[get_today] = lambda: date(2026, 11, 4)
 
         response = await client.get(DAILY_SUMMARY_URL)
 
         assert response.status_code == 200
+        apartment_sale = {
+            "id": seed["apartment_highest"].id,
+            "property_type": "APT",
+            "complex_id": complexes["apartment"].id,
+            "deal_date": "2026-10-04",
+            "deal_amount": 3_000_000_000,
+            "dealing_type": "중개거래",
+            "cancel_deal_date": None,
+            "house_type": None,
+            "building_name": "역삼래미안",
+            "apartment_dong": "101",
+            "floor": 10,
+            "build_year": 2005,
+            "exclusive_use_area": 84.97,
+            "total_floor_area": None,
+            "plottage_area": None,
+            "land_area": None,
+            "address": "서울특별시 강남구 역삼동 123-4",
+        }
+        single_multi_sale = {
+            "id": seed["single_multi_lowest"].id,
+            "property_type": "SINGLE_MULTI",
+            "complex_id": None,
+            "deal_date": "2026-10-04",
+            "deal_amount": 11_000_000,
+            "dealing_type": "중개거래",
+            "cancel_deal_date": None,
+            "house_type": "단독",
+            "building_name": None,
+            "apartment_dong": None,
+            "floor": None,
+            "build_year": None,
+            "exclusive_use_area": None,
+            "total_floor_area": 120.5,
+            "plottage_area": 200.0,
+            "land_area": None,
+            "address": "부산광역시 해운대구 우동 1**",
+        }
         assert response.json() == {
             "deal_date": "2026-10-04",
-            "highest_sale": {
-                "id": seed["highest"].id,
-                "property_type": "APT",
-                "complex_id": complexes["apartment"].id,
-                "deal_date": "2026-10-04",
-                "deal_amount": 3_000_000_000,
-                "dealing_type": "중개거래",
-                "cancel_deal_date": None,
-                "house_type": None,
-                "building_name": "역삼래미안",
-                "apartment_dong": "101",
-                "floor": 10,
-                "build_year": 2005,
-                "exclusive_use_area": 84.97,
-                "total_floor_area": None,
-                "plottage_area": None,
-                "land_area": None,
-                "address": "서울특별시 강남구 역삼동 123-4",
+            "apartment": {
+                "highest_sale": apartment_sale,
+                "lowest_sale": apartment_sale
+                | {"id": seed["apartment_lowest"].id, "deal_amount": 900_000_000, "floor": 3},
+                # 해제되지 않은 매매 3건 + 전월세 1건
+                "transaction_count": 4,
             },
-            "lowest_sale": {
-                "id": seed["lowest"].id,
-                "property_type": "SINGLE_MULTI",
-                "complex_id": None,
-                "deal_date": "2026-10-04",
-                "deal_amount": 11_000_000,
-                "dealing_type": "중개거래",
-                "cancel_deal_date": None,
-                "house_type": "단독",
-                "building_name": None,
-                "apartment_dong": None,
-                "floor": None,
-                "build_year": None,
-                "exclusive_use_area": None,
-                "total_floor_area": 120.5,
-                "plottage_area": 200.0,
-                "land_area": None,
-                "address": "부산광역시 해운대구 우동 1**",
+            "single_multi": {
+                "highest_sale": single_multi_sale
+                | {
+                    "id": seed["single_multi_highest"].id,
+                    "deal_amount": 800_000_000,
+                    "total_floor_area": 250.0,
+                    "plottage_area": 300.0,
+                    "address": "부산광역시 해운대구 우동 2**",
+                },
+                "lowest_sale": single_multi_sale,
+                # 해제되지 않은 매매 2건 + 전월세 1건
+                "transaction_count": 3,
             },
-            # 해제되지 않은 매매 4건 + 전월세 2건
-            "transaction_count": 6,
         }
 
     async def test_returns_null_sales_when_no_sale_on_month_ago(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
     ) -> None:
-        """1개월 전 날짜에 매매가 없으면 최고가·최저가는 null이고 건수는 전월세만 센다."""
+        """1개월 전 날짜에 매매가 없으면 최고가·최저가는 null이고 건수는 유형별 전월세만 센다."""
         app.dependency_overrides[get_today] = lambda: date(2026, 11, 2)
 
         response = await client.get(DAILY_SUMMARY_URL)
@@ -151,9 +180,8 @@ class TestGetDailySummary:
         assert response.status_code == 200
         assert response.json() == {
             "deal_date": "2026-10-02",
-            "highest_sale": None,
-            "lowest_sale": None,
-            "transaction_count": 2,
+            "apartment": {"highest_sale": None, "lowest_sale": None, "transaction_count": 2},
+            "single_multi": {"highest_sale": None, "lowest_sale": None, "transaction_count": 1},
         }
 
     async def test_returns_zero_count_when_no_transaction_on_month_ago(
@@ -167,9 +195,8 @@ class TestGetDailySummary:
         assert response.status_code == 200
         assert response.json() == {
             "deal_date": "2026-10-01",
-            "highest_sale": None,
-            "lowest_sale": None,
-            "transaction_count": 0,
+            "apartment": {"highest_sale": None, "lowest_sale": None, "transaction_count": 0},
+            "single_multi": {"highest_sale": None, "lowest_sale": None, "transaction_count": 0},
         }
 
     async def test_clamps_deal_date_to_month_end(self, client: httpx.AsyncClient) -> None:
@@ -181,9 +208,8 @@ class TestGetDailySummary:
         assert response.status_code == 200
         assert response.json() == {
             "deal_date": "2026-09-30",
-            "highest_sale": None,
-            "lowest_sale": None,
-            "transaction_count": 0,
+            "apartment": {"highest_sale": None, "lowest_sale": None, "transaction_count": 0},
+            "single_multi": {"highest_sale": None, "lowest_sale": None, "transaction_count": 0},
         }
 
 
