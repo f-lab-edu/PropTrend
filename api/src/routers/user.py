@@ -18,7 +18,6 @@ SESSION_COOKIE_OPTIONS = {"path": "/", "httponly": True, "secure": True, "samesi
 
 @router.post(
     "/sign-up",
-    response_model=UserResponse,
     status_code=status.HTTP_201_CREATED,
     summary="회원가입",
     description=(
@@ -30,11 +29,12 @@ SESSION_COOKIE_OPTIONS = {"path": "/", "httponly": True, "secure": True, "samesi
 async def sign_up(
     body: SignUpRequest,
     session: Annotated[AsyncSession, Depends(get_session)],
-):
+) -> UserResponse:
     """사용자를 생성한다."""
     # TODO: API 호출 제한. 전체 API 공통 제한에 더해 IP 기준으로 더 엄격한 제한을 건다.
     async with session.begin():
-        return await create_user(session, email=body.email, nickname=body.nickname, password=body.password)
+        user = await create_user(session, email=body.email, nickname=body.nickname, password=body.password)
+    return UserResponse.model_validate(user)
 
 
 @router.post(
@@ -84,12 +84,11 @@ async def logout(
 
 @router.get(
     "/me",
-    response_model=UserResponse,
     summary="내 정보 조회",
     description=(
         "세션 쿠키로 로그인한 사용자 정보를 반환합니다.\n\n- 쿠키가 없거나 세션이 만료·삭제되었으면 401을 반환합니다."
     ),
 )
-async def get_me(user: Annotated[User, Depends(get_current_user)]):
+async def get_me(user: Annotated[User, Depends(get_current_user)]) -> UserResponse:
     """로그인한 사용자 정보를 반환한다."""
-    return user
+    return UserResponse.model_validate(user)

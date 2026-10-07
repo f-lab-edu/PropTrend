@@ -12,7 +12,6 @@ router = APIRouter()
 
 @router.get(
     "",
-    response_model=RegionListResponse,
     status_code=status.HTTP_200_OK,
     summary="시도·시군구 목록 조회",
     description=(
@@ -28,7 +27,7 @@ router = APIRouter()
 )
 async def get_region_list(
     session: Annotated[AsyncSession, Depends(get_session)],
-):
+) -> RegionListResponse:
     """시도·시군구 목록을 조회한다."""
     async with session.begin():
-        return {"items": await get_regions(session)}
+        return RegionListResponse.model_validate({"items": await get_regions(session)})

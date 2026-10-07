@@ -24,7 +24,7 @@ router = APIRouter()
         "- 쿠키가 없거나 세션이 만료·삭제되었으면 401을 반환합니다."
     ),
 )
-async def get_favorite_complexes_route(
+async def get_favorite_complex_list(
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> FavoriteComplexListResponse:
@@ -44,7 +44,7 @@ async def get_favorite_complexes_route(
         "- `complex_id`에 해당하는 단지가 없으면 404를 반환합니다."
     ),
 )
-async def add_favorite_complex_route(
+async def create_favorite_complex(
     body: FavoriteComplexAddRequest,
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
@@ -66,7 +66,7 @@ async def add_favorite_complex_route(
         "- 쿠키가 없거나 세션이 만료·삭제되었으면 401을 반환합니다."
     ),
 )
-async def remove_favorite_complex_route(
+async def delete_favorite_complex(
     complex_id: Annotated[int, Path(ge=1)],
     user: Annotated[User, Depends(get_current_user)],
     session: Annotated[AsyncSession, Depends(get_session)],
