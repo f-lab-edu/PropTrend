@@ -1,5 +1,5 @@
-import { fetchMe, readErrorMessage, safeNext } from "/auth.js";
-import { showMessage } from "/common.js";
+import { fetchMe, readErrorMessage, safeNext } from "./auth.js";
+import { showMessage } from "./common.js";
 
 const form = document.getElementById("login-form");
 const emailInput = document.getElementById("email");

@@ -55,4 +55,4 @@ async function renderAuthNav(nav) {
 }
 
 const authNav = document.getElementById("auth-nav");
-if (authNav) renderAuthNav(authNav);
+if (authNav) renderAuthNav(authNav).catch(console.error);

@@ -1,5 +1,5 @@
-import { fetchMe, readErrorMessage } from "/auth.js";
-import { showMessage } from "/common.js";
+import { fetchMe, readErrorMessage } from "./auth.js";
+import { showMessage } from "./common.js";
 
 // 422의 항목별 msg는 pydantic 영문이라 실패한 필드만 보고 안내 문구를 고른다.
 const FIELD_ERROR_MESSAGES = {

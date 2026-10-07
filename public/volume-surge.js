@@ -1,4 +1,4 @@
-import { element, formatDate } from "/common.js";
+import { element, formatDate } from "./common.js";
 
 const container = document.getElementById("volume-surge");
 
@@ -56,4 +56,4 @@ async function loadVolumeSurge() {
   }
 }
 
-loadVolumeSurge();
+await loadVolumeSurge();

@@ -77,4 +77,4 @@ sidoSelect.addEventListener("change", () => {
 });
 
 fillDealMonths();
-loadRegions();
+loadRegions().catch(console.error);

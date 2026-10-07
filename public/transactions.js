@@ -5,7 +5,7 @@ import {
   DEAL_TYPE_LABELS,
   PROPERTY_TYPE_LABELS,
   showMessage,
-} from "/common.js";
+} from "./common.js";
 
 const PAGE_SIZE = 100;
 const REQUIRED_PARAMS = ["property_type", "deal_type", "sido_code", "sigungu_code", "deal_ymd"];
@@ -117,19 +117,18 @@ async function loadTransactions(filters, page) {
   }
 }
 
-function main() {
+async function main() {
   const params = new URLSearchParams(location.search);
   const filters = Object.fromEntries(REQUIRED_PARAMS.map((key) => [key, params.get(key)]));
   // 값 형식은 API가 검증하므로 여기서는 열 구성을 고를 수 있는지만 본다.
   const missing = REQUIRED_PARAMS.some((key) => !filters[key]);
-  if (missing || !COLUMNS[filters.deal_type] || !PROPERTY_TYPE_LABELS[filters.property_type]) {
+  if (missing || !Object.hasOwn(COLUMNS, filters.deal_type) || !PROPERTY_TYPE_LABELS[filters.property_type]) {
     showMessage(message, "검색 조건이 올바르지 않습니다. 조건 변경에서 다시 선택하세요.");
     return;
   }
   const page = Math.max(1, Number.parseInt(params.get("page"), 10) || 1);
 
-  renderSummary(filters);
-  loadTransactions(filters, page);
+  await Promise.all([renderSummary(filters), loadTransactions(filters, page)]);
 }
 
-main();
+await main();

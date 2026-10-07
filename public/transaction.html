@@ -5,10 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>실거래 상세</title>
     <!-- 빌드 없이 쓰는 Tailwind 브라우저 빌드. 런타임에 CSS를 만들므로 운영 배포 전에는 standalone CLI로 대체한다. -->
-    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.min.js"
+      integrity="sha384-aJ9rL4k6lF+91guGvUFVSkpIcge7Zd9EiI4TQDLoK9kFaFJgKHgjEXVvG/qA5COj"
+      crossorigin="anonymous"></script>
     <!-- 시간 축을 쓰려면 날짜 어댑터를 Chart.js 다음에 불러와야 한다. -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.1/dist/chart.umd.min.js"
+      integrity="sha384-jb8JQMbMoBUzgWatfe6COACi2ljcDdZQ2OxczGA3bGNeWe+6DChMTBJemed7ZnvJ"
+      crossorigin="anonymous"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns@3.0.0/dist/chartjs-adapter-date-fns.bundle.min.js"
+      integrity="sha384-cVMg8E3QFwTvGCDuK+ET4PD341jF3W8nO1auiXfuZNQkzbUUiBGLsIQUE+b1mxws"
+      crossorigin="anonymous"></script>
     <script type="module" src="/transaction.js"></script>
     <script type="module" src="/auth.js"></script>
   </head>
@@ -35,7 +41,7 @@
         <section class="rounded-xl bg-white p-6 shadow-sm">
           <div id="badges" class="mb-2 flex flex-wrap items-center gap-1.5 text-xs"></div>
           <div class="flex items-start justify-between gap-3">
-            <h1 id="title" class="text-2xl font-bold"></h1>
+            <h1 id="title" class="text-2xl font-bold">실거래 상세</h1>
             <!-- 단지가 있는 거래(아파트·오피스텔)에서만 보인다. -->
             <button
               id="favorite"

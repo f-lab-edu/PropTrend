@@ -1,5 +1,5 @@
-import { fetchMe, readErrorMessage } from "/auth.js";
-import { PROPERTY_TYPE_LABELS, formatDate, showMessage, transactionTitle } from "/common.js";
+import { fetchMe, readErrorMessage } from "./auth.js";
+import { PROPERTY_TYPE_LABELS, formatDate, showMessage, transactionTitle } from "./common.js";
 
 const message = document.getElementById("message");
 const profile = document.getElementById("profile");
@@ -94,7 +94,7 @@ async function loadProfile() {
   document.getElementById("email").textContent = user.email;
   document.getElementById("created-at").textContent = formatDate(KST_DATE.format(new Date(user.created_at)));
   profile.classList.remove("hidden");
-  loadFavorites();
+  await loadFavorites();
 }
 
 logoutButton.addEventListener("click", async () => {
@@ -110,4 +110,4 @@ logoutButton.addEventListener("click", async () => {
   }
 });
 
-loadProfile();
+await loadProfile();

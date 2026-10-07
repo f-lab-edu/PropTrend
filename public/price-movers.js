@@ -1,4 +1,4 @@
-import { element, formatArea, formatDate, formatWon, transactionTitle } from "/common.js";
+import { element, formatArea, formatDate, formatWon, transactionTitle } from "./common.js";
 
 const container = document.getElementById("price-movers");
 
@@ -77,4 +77,4 @@ async function loadPriceMovers() {
   }
 }
 
-loadPriceMovers();
+await loadPriceMovers();

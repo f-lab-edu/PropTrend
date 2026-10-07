@@ -1,4 +1,4 @@
-import { fetchMe, readErrorMessage } from "/auth.js";
+import { fetchMe, readErrorMessage } from "./auth.js";
 import {
   COLUMNS,
   DEAL_DATE,
@@ -10,7 +10,7 @@ import {
   isJeonse,
   showMessage,
   transactionTitle,
-} from "/common.js";
+} from "./common.js";
 
 // years가 null이면 전체 기간이다.
 const PERIODS = [
@@ -311,7 +311,7 @@ async function main() {
   const params = new URLSearchParams(location.search);
   const dealType = params.get("deal_type");
   const id = params.get("id");
-  if (!COLUMNS[dealType] || !/^\d+$/.test(id ?? "")) {
+  if (!Object.hasOwn(COLUMNS, dealType) || !/^\d+$/.test(id ?? "")) {
     showMessage(message, "잘못된 주소입니다. 목록에서 거래를 다시 선택하세요.");
     return;
   }
@@ -333,4 +333,4 @@ async function main() {
   }
 }
 
-main();
+await main();

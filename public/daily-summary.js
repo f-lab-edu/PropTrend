@@ -1,4 +1,4 @@
-import { element, formatArea, formatDate, formatWon, transactionTitle } from "/common.js";
+import { element, formatArea, formatDate, formatWon, transactionTitle } from "./common.js";
 
 const container = document.getElementById("daily-summary");
 const CARD_CLASS = "flex flex-col rounded-xl bg-white p-5 shadow-sm";
@@ -77,4 +77,4 @@ async function loadDailySummary() {
   }
 }
 
-loadDailySummary();
+await loadDailySummary();
