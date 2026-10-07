@@ -59,7 +59,7 @@ async function loadPriceMovers() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const movers = await response.json();
     document.getElementById("price-movers-title").textContent =
-      `거래액 급등·급락 단지 TOP 5 · ${formatDate(movers.base_date)} 기준`;
+      `거래액 급등·급락 아파트 단지 TOP 5 · ${formatDate(movers.base_date)} 기준`;
     container.replaceChildren(
       moverPanel("급등", movers.surge, "최근 1년 안에 가격이 오른 아파트 단지가 없습니다."),
       moverPanel("급락", movers.plunge, "최근 1년 안에 가격이 내린 아파트 단지가 없습니다."),
@@ -71,7 +71,7 @@ async function loadPriceMovers() {
       element(
         "p",
         "col-span-full rounded-xl bg-white p-6 text-center text-sm text-slate-500 shadow-sm",
-        "급등·급락 단지를 불러오지 못했습니다.",
+        "급등·급락 아파트 단지를 불러오지 못했습니다.",
       ),
     );
   }
