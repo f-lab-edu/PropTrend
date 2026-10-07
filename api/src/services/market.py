@@ -33,9 +33,11 @@ VOLUME_SURGE_LIMIT = 5
 async def get_daily_summary(session: AsyncSession, *, base_date: date) -> DailySummaryResponse:
     """신고 기한만큼 앞선 계약일 하루의 아파트·단독다가구별 매매 최고가·최저가 거래와 거래건수를 조회한다."""
     # 기준일이 월말이어도 깨지지 않도록 PostgreSQL interval 연산으로 구한다(10/31의 1개월 전은 9/30).
-    deal_date = await session.scalar(
-        select(cast(literal(base_date, Date) - func.make_interval(0, REPORT_DELAY_MONTHS, type_=Interval), Date))
-    )
+    deal_date = (
+        await session.execute(
+            select(cast(literal(base_date, Date) - func.make_interval(0, REPORT_DELAY_MONTHS, type_=Interval), Date))
+        )
+    ).scalar_one()
 
     rows = {}
     for property_type in (PropertyType.APT, PropertyType.SINGLE_MULTI):
@@ -94,20 +96,22 @@ async def get_price_movers(session: AsyncSession, *, base_date: date) -> PriceMo
     recent_start = base - func.make_interval(PRICE_MOVER_RECENT_YEARS, type_=Interval)
 
     group_columns = [getattr(SaleTransaction, column) for column in PRICE_TREND_GROUP_COLUMNS[PropertyType.APT]]
-    window = {
-        "partition_by": [SaleTransaction.sido_code, SaleTransaction.sigungu_code, *group_columns],
-        "order_by": [SaleTransaction.deal_date.desc(), SaleTransaction.id.desc()],
-    }
+    partition_by = [SaleTransaction.sido_code, SaleTransaction.sigungu_code, *group_columns]
+    order_by = [SaleTransaction.deal_date.desc(), SaleTransaction.id.desc()]
     ranked = (
         select(
             SaleTransaction.id,
             SaleTransaction.deal_date,
             SaleTransaction.deal_amount,
-            func.row_number().over(**window).label("rn"),
-            func.lead(SaleTransaction.id).over(**window).label("previous_id"),
-            func.lead(SaleTransaction.deal_date).over(**window).label("previous_deal_date"),
-            func.lead(SaleTransaction.deal_amount).over(**window).label("previous_deal_amount"),
-            func.lead(SaleTransaction.floor).over(**window).label("previous_floor"),
+            func.row_number().over(partition_by=partition_by, order_by=order_by).label("rn"),
+            func.lead(SaleTransaction.id).over(partition_by=partition_by, order_by=order_by).label("previous_id"),
+            func.lead(SaleTransaction.deal_date)
+            .over(partition_by=partition_by, order_by=order_by)
+            .label("previous_deal_date"),
+            func.lead(SaleTransaction.deal_amount)
+            .over(partition_by=partition_by, order_by=order_by)
+            .label("previous_deal_amount"),
+            func.lead(SaleTransaction.floor).over(partition_by=partition_by, order_by=order_by).label("previous_floor"),
         )
         .where(
             SaleTransaction.property_type == PropertyType.APT,
