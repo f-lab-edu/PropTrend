@@ -58,7 +58,7 @@ async function loadDailySummary() {
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const summary = await response.json();
     document.getElementById("daily-summary-title").textContent =
-      `하루 실거래 요약 · ${formatDate(summary.deal_date)} 계약`;
+      `일일 실거래 요약 · ${formatDate(summary.deal_date)} 계약`;
     container.replaceChildren(
       countCard(summary.transaction_count),
       saleCard("최고가 매매", summary.highest_sale),
