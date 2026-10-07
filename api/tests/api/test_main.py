@@ -39,6 +39,13 @@ class TestPublicPage:
         assert response.status_code == 200
         assert response.headers["content-type"].startswith("text/html")
 
+    async def test_requires_revalidation(self, client: httpx.AsyncClient) -> None:
+        """정적 파일은 캐시본을 쓰기 전에 재검증하도록 no-cache를 붙인다."""
+        response = await client.get("/common.js")
+
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-cache"
+
     async def test_returns_not_found_for_unknown_path(self, client: httpx.AsyncClient) -> None:
         """없는 경로는 공통 오류 응답 형식의 404를 준다."""
         response = await client.get("/not-exists.html")

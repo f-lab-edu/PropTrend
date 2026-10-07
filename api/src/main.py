@@ -6,6 +6,8 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.responses import Response
+from starlette.types import Scope
 
 from .config import get_settings
 from .db import create_tables, dispose_engine
@@ -25,6 +27,17 @@ from .routers.region import router as region_router
 from .routers.user import router as user_router
 
 load_dotenv()
+
+
+class NoCacheStaticFiles(StaticFiles):
+    """매 요청마다 브라우저가 최신 여부를 다시 확인하게 하는 정적 파일 앱."""
+
+    async def get_response(self, path: str, scope: Scope) -> Response:
+        response = await super().get_response(path, scope)
+        # Cache-Control이 없으면 브라우저가 휴리스틱으로 캐시본을 재검증 없이 써서 수정한 JS가 반영되지 않는다.
+        # no-cache는 저장은 허용하되 ETag로 재검증하게 하므로 바뀌지 않은 파일은 304로 끝난다.
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 @asynccontextmanager
@@ -71,4 +84,4 @@ def health_check() -> dict[str, str]:
 
 
 # "/"에 마운트하면 뒤에 등록한 경로를 가리므로 모든 라우트 다음에 둔다.
-app.mount("/", StaticFiles(directory=get_settings().public_dir, html=True), name="public")
+app.mount("/", NoCacheStaticFiles(directory=get_settings().public_dir, html=True), name="public")
