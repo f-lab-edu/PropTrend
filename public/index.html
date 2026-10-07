@@ -9,6 +9,7 @@
     <script src="/app.js" defer></script>
     <script type="module" src="/daily-summary.js"></script>
     <script type="module" src="/price-movers.js"></script>
+    <script type="module" src="/volume-surge.js"></script>
     <script type="module" src="/auth.js"></script>
   </head>
   <body class="min-h-screen bg-slate-50 text-slate-900">
@@ -99,6 +100,16 @@
           <div id="price-movers" class="mt-3 grid grid-cols-1 gap-4 md:grid-cols-2">
             <div class="h-96 animate-pulse rounded-xl bg-white shadow-sm"></div>
             <div class="h-96 animate-pulse rounded-xl bg-white shadow-sm"></div>
+          </div>
+        </div>
+        <div class="mt-8">
+          <h3 id="volume-surge-title" class="font-medium">거래량 급등 지역 TOP 5</h3>
+          <div id="volume-surge" class="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-5">
+            <div class="h-40 animate-pulse rounded-xl bg-white shadow-sm"></div>
+            <div class="h-40 animate-pulse rounded-xl bg-white shadow-sm"></div>
+            <div class="h-40 animate-pulse rounded-xl bg-white shadow-sm"></div>
+            <div class="h-40 animate-pulse rounded-xl bg-white shadow-sm"></div>
+            <div class="h-40 animate-pulse rounded-xl bg-white shadow-sm"></div>
           </div>
         </div>
       </section>
