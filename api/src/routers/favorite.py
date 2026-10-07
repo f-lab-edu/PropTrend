@@ -26,7 +26,7 @@ async def get_favorite_complexes_route(
 ) -> list[FavoriteComplexResponse]:
     """즐겨찾기한 단지 목록을 조회한다."""
     async with session.begin():
-        return await get_favorite_complexes(session, user.id)
+        return await get_favorite_complexes(session, user_id=user.id)
 
 
 @router.post(
@@ -47,7 +47,7 @@ async def add_favorite_complex_route(
 ) -> FavoriteComplexAddResponse:
     """단지 즐겨찾기를 추가한다."""
     async with session.begin():
-        return await add_favorite_complex(session, user.id, body.complex_id)
+        return await add_favorite_complex(session, user_id=user.id, complex_id=body.complex_id)
 
 
 @router.delete(
@@ -68,4 +68,4 @@ async def remove_favorite_complex_route(
 ) -> None:
     """단지 즐겨찾기를 제거한다."""
     async with session.begin():
-        await remove_favorite_complex(session, user.id, complex_id)
+        await remove_favorite_complex(session, user_id=user.id, complex_id=complex_id)

@@ -37,7 +37,7 @@ async def get_current_user(
     # expire_on_commit=False라 트랜잭션이 끝난 뒤에도 사용자 속성을 읽을 수 있고,
     # 라우터는 같은 세션으로 자기 트랜잭션을 새로 열 수 있다.
     async with session.begin():
-        return await get_user_by_session_token(session, token)
+        return await get_user_by_session_token(session, token=token)
 
 
 def get_today() -> date:

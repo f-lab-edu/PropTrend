@@ -29,7 +29,7 @@ REPORT_DELAY_MONTHS = 1
 VOLUME_SURGE_LIMIT = 5
 
 
-async def get_daily_summary(session: AsyncSession, base_date: date) -> DailySummaryResponse:
+async def get_daily_summary(session: AsyncSession, *, base_date: date) -> DailySummaryResponse:
     """기준일로부터 신고 기한만큼 앞선 계약일 하루의 매매 최고가·최저가 거래와 전체 거래건수를 조회한다."""
     # 기준일이 월말이어도 깨지지 않도록 PostgreSQL interval 연산으로 구한다(10/31의 1개월 전은 9/30).
     deal_date = await session.scalar(
@@ -65,7 +65,7 @@ async def get_daily_summary(session: AsyncSession, base_date: date) -> DailySumm
     transaction_count = await session.scalar(select(sale_count + rent_count))
 
     names = await get_region_names(session)
-    complex_ids = await get_complex_ids(session, [sale for sale in (highest, lowest) if sale is not None])
+    complex_ids = await get_complex_ids(session, transactions=[sale for sale in (highest, lowest) if sale is not None])
     return DailySummaryResponse(
         deal_date=deal_date,
         highest_sale=None if highest is None else build_sale_response(highest, names, complex_ids),
@@ -74,7 +74,7 @@ async def get_daily_summary(session: AsyncSession, base_date: date) -> DailySumm
     )
 
 
-async def get_price_movers(session: AsyncSession, base_date: date) -> PriceMoversResponse:
+async def get_price_movers(session: AsyncSession, *, base_date: date) -> PriceMoversResponse:
     """직전 거래 대비 최근 거래 금액 변동률이 가장 큰 아파트 단지와 가장 작은 아파트 단지를 조회한다."""
     # 기준일이 2/29여도 깨지지 않도록 연 단위 경계는 PostgreSQL interval 연산으로 구한다.
     base = literal(base_date, Date)
@@ -139,7 +139,7 @@ async def get_price_movers(session: AsyncSession, base_date: date) -> PriceMover
         )
     }
     names = await get_region_names(session)
-    complex_ids = await get_complex_ids(session, list(latest_sales.values()))
+    complex_ids = await get_complex_ids(session, transactions=list(latest_sales.values()))
     movers = [
         PriceMover(
             change_rate=row.change_rate,
@@ -167,7 +167,7 @@ async def get_price_movers(session: AsyncSession, base_date: date) -> PriceMover
     )
 
 
-async def get_volume_surge_regions(session: AsyncSession, base_date: date) -> VolumeSurgeRegionsResponse:
+async def get_volume_surge_regions(session: AsyncSession, *, base_date: date) -> VolumeSurgeRegionsResponse:
     """최근 1개월 매매 건수가 이전 1개월보다 가장 많이 늘어난 시군구를 조회한다."""
     # 기준일이 월말이어도 깨지지 않도록 월 단위 경계는 PostgreSQL interval 연산으로 구한다.
     # 경계는 응답에도 실으므로 집계 전에 날짜로 받아 둔다. 최근 구간의 끝부터 1개월씩 거슬러 올라간다.

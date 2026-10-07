@@ -34,7 +34,7 @@ async def sign_up(
     """사용자를 생성한다."""
     # TODO: API 호출 제한. 전체 API 공통 제한에 더해 IP 기준으로 더 엄격한 제한을 건다.
     async with session.begin():
-        return await create_user(session, body)
+        return await create_user(session, email=body.email, nickname=body.nickname, password=body.password)
 
 
 @router.post(
@@ -56,8 +56,8 @@ async def login(
     """이메일과 비밀번호를 검증하고 세션 쿠키를 발급한다."""
     # TODO: API 호출 제한. 전체 API 공통 제한에 더해 IP 기준과 이메일(계정) 기준 제한을 건다.
     async with session.begin():
-        user = await authenticate_user(session, body)
-        token = await create_user_session(session, user)
+        user = await authenticate_user(session, email=body.email, password=body.password)
+        token = await create_user_session(session, user_id=user.id)
     response.set_cookie(SESSION_COOKIE_NAME, token, max_age=int(SESSION_TTL.total_seconds()), **SESSION_COOKIE_OPTIONS)
 
 
@@ -78,7 +78,7 @@ async def logout(
     """현재 세션을 삭제하고 세션 쿠키를 지운다."""
     if token is not None:
         async with session.begin():
-            await delete_user_session(session, token)
+            await delete_user_session(session, token=token)
     response.delete_cookie(SESSION_COOKIE_NAME, **SESSION_COOKIE_OPTIONS)
 
 

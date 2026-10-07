@@ -9,7 +9,7 @@ from ..schemas.favorite import FavoriteComplexAddResponse, FavoriteComplexRespon
 from .prop_transaction import get_region_names
 
 
-async def add_favorite_complex(session: AsyncSession, user_id: int, complex_id: int) -> FavoriteComplexAddResponse:
+async def add_favorite_complex(session: AsyncSession, *, user_id: int, complex_id: int) -> FavoriteComplexAddResponse:
     """사용자의 단지 즐겨찾기를 추가한다. 이미 있으면 그대로 둔다."""
     if await session.get(Complex, complex_id) is None:
         raise ComplexNotFoundError("단지를 찾을 수 없습니다")
@@ -21,14 +21,14 @@ async def add_favorite_complex(session: AsyncSession, user_id: int, complex_id: 
     return FavoriteComplexAddResponse(complex_id=complex_id)
 
 
-async def remove_favorite_complex(session: AsyncSession, user_id: int, complex_id: int) -> None:
+async def remove_favorite_complex(session: AsyncSession, *, user_id: int, complex_id: int) -> None:
     """사용자의 단지 즐겨찾기를 제거한다. 없으면 아무것도 하지 않는다."""
     await session.execute(
         delete(FavoriteComplex).where(FavoriteComplex.user_id == user_id, FavoriteComplex.complex_id == complex_id)
     )
 
 
-async def get_favorite_complexes(session: AsyncSession, user_id: int) -> list[FavoriteComplexResponse]:
+async def get_favorite_complexes(session: AsyncSession, *, user_id: int) -> list[FavoriteComplexResponse]:
     """사용자가 즐겨찾기한 단지를 최근에 추가한 순으로 조회한다."""
     result = await session.execute(
         select(FavoriteComplex.created_at, Complex)

@@ -35,7 +35,7 @@ async def get_market_daily_summary(
 ) -> DailySummaryResponse:
     """1개월 전 일자 실거래 요약을 조회한다."""
     async with session.begin():
-        return await get_daily_summary(session, today)
+        return await get_daily_summary(session, base_date=today)
 
 
 @router.get(
@@ -64,7 +64,7 @@ async def get_market_price_movers(
 ) -> PriceMoversResponse:
     """거래액 급등/급락 단지 TOP 5를 조회한다."""
     async with session.begin():
-        return await get_price_movers(session, today)
+        return await get_price_movers(session, base_date=today)
 
 
 @router.get(
@@ -90,4 +90,4 @@ async def get_market_volume_surge_regions(
 ) -> VolumeSurgeRegionsResponse:
     """거래량 급등 지역 TOP 5를 조회한다."""
     async with session.begin():
-        return await get_volume_surge_regions(session, today)
+        return await get_volume_surge_regions(session, base_date=today)

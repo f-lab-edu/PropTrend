@@ -10,7 +10,6 @@ from ..model.complex import COMPLEX_KEY_COLUMNS, COMPLEX_PROPERTY_TYPES, Complex
 from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction, TransactionMixin
 from ..model.raw import LegalDongCodeRawItem
 from ..schemas.prop_transaction import (
-    PropTransactionQuery,
     RentPriceTrendPoint,
     RentPropTransactionDetailResponse,
     RentPropTransactionResponse,
@@ -61,7 +60,7 @@ async def get_region_names(session: AsyncSession) -> dict[tuple[str, str], str]:
     return names
 
 
-async def get_complex_ids(session: AsyncSession, transactions: Sequence[TransactionMixin]) -> dict[int, int]:
+async def get_complex_ids(session: AsyncSession, *, transactions: Sequence[TransactionMixin]) -> dict[int, int]:
     """거래 id → 거래가 속한 단지 id. 단지가 없는 거래는 담지 않는다."""
     complex_ids: dict[int, int] = {}
     for property_type in COMPLEX_PROPERTY_TYPES:
@@ -113,59 +112,75 @@ def _build_rent_response(
 
 
 async def get_sale_transactions(
-    session: AsyncSession, query: PropTransactionQuery
+    session: AsyncSession,
+    *,
+    property_type: PropertyType,
+    sido_code: str,
+    sigungu_code: str,
+    deal_ymd: str,
+    limit: int,
+    offset: int,
 ) -> list[SalePropTransactionResponse]:
     """조건에 맞는 매매 실거래 목록을 조회한다."""
-    start, end = month_range(query.deal_ymd)
+    start, end = month_range(deal_ymd)
     conditions = [
-        SaleTransaction.property_type == query.property_type,
-        SaleTransaction.sido_code == query.sido_code,
-        SaleTransaction.sigungu_code == query.sigungu_code,
+        SaleTransaction.property_type == property_type,
+        SaleTransaction.sido_code == sido_code,
+        SaleTransaction.sigungu_code == sigungu_code,
         SaleTransaction.deal_date >= start,
         SaleTransaction.deal_date < end,
     ]
 
     # 페이지 경계가 요청마다 달라지지 않도록 id 순으로 고정한다.
     result = await session.execute(
-        select(SaleTransaction).where(*conditions).order_by(SaleTransaction.id).limit(query.limit).offset(query.offset)
+        select(SaleTransaction).where(*conditions).order_by(SaleTransaction.id).limit(limit).offset(offset)
     )
     transactions = list(result.scalars())
     names = await get_region_names(session)
-    complex_ids = await get_complex_ids(session, transactions)
+    complex_ids = await get_complex_ids(session, transactions=transactions)
     return [build_sale_response(transaction, names, complex_ids) for transaction in transactions]
 
 
 async def get_rent_transactions(
-    session: AsyncSession, query: PropTransactionQuery
+    session: AsyncSession,
+    *,
+    property_type: PropertyType,
+    sido_code: str,
+    sigungu_code: str,
+    deal_ymd: str,
+    limit: int,
+    offset: int,
 ) -> list[RentPropTransactionResponse]:
     """조건에 맞는 전월세 실거래 목록을 조회한다."""
-    start, end = month_range(query.deal_ymd)
+    start, end = month_range(deal_ymd)
     conditions = [
-        RentTransaction.property_type == query.property_type,
-        RentTransaction.sido_code == query.sido_code,
-        RentTransaction.sigungu_code == query.sigungu_code,
+        RentTransaction.property_type == property_type,
+        RentTransaction.sido_code == sido_code,
+        RentTransaction.sigungu_code == sigungu_code,
         RentTransaction.deal_date >= start,
         RentTransaction.deal_date < end,
     ]
 
     # 페이지 경계가 요청마다 달라지지 않도록 id 순으로 고정한다.
     result = await session.execute(
-        select(RentTransaction).where(*conditions).order_by(RentTransaction.id).limit(query.limit).offset(query.offset)
+        select(RentTransaction).where(*conditions).order_by(RentTransaction.id).limit(limit).offset(offset)
     )
     transactions = list(result.scalars())
     names = await get_region_names(session)
-    complex_ids = await get_complex_ids(session, transactions)
+    complex_ids = await get_complex_ids(session, transactions=transactions)
     return [_build_rent_response(transaction, names, complex_ids) for transaction in transactions]
 
 
-async def get_sale_transaction_detail(session: AsyncSession, transaction_id: int) -> SalePropTransactionDetailResponse:
+async def get_sale_transaction_detail(
+    session: AsyncSession, *, transaction_id: int
+) -> SalePropTransactionDetailResponse:
     """매매 실거래 상세 정보를 조회한다."""
     transaction = await session.get(SaleTransaction, transaction_id)
     if transaction is None:
         raise TransactionNotFoundError("실거래를 찾을 수 없습니다")
 
     names = await get_region_names(session)
-    complex_ids = await get_complex_ids(session, [transaction])
+    complex_ids = await get_complex_ids(session, transactions=[transaction])
     base_transaction = build_sale_response(transaction, names, complex_ids)
     group_columns = PRICE_TREND_GROUP_COLUMNS.get(transaction.property_type)
     if group_columns is None:
@@ -192,14 +207,16 @@ async def get_sale_transaction_detail(session: AsyncSession, transaction_id: int
     return SalePropTransactionDetailResponse(base_transaction=base_transaction, trend=trend)
 
 
-async def get_rent_transaction_detail(session: AsyncSession, transaction_id: int) -> RentPropTransactionDetailResponse:
+async def get_rent_transaction_detail(
+    session: AsyncSession, *, transaction_id: int
+) -> RentPropTransactionDetailResponse:
     """전월세 실거래 상세 정보를 조회한다."""
     transaction = await session.get(RentTransaction, transaction_id)
     if transaction is None:
         raise TransactionNotFoundError("실거래를 찾을 수 없습니다")
 
     names = await get_region_names(session)
-    complex_ids = await get_complex_ids(session, [transaction])
+    complex_ids = await get_complex_ids(session, transactions=[transaction])
     base_transaction = _build_rent_response(transaction, names, complex_ids)
     group_columns = PRICE_TREND_GROUP_COLUMNS.get(transaction.property_type)
     if group_columns is None:

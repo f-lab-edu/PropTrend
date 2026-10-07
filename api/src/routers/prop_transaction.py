@@ -44,7 +44,15 @@ async def get_sale_prop_transactions(
 ) -> list[SalePropTransactionResponse]:
     """매매 실거래 목록을 조회한다."""
     async with session.begin():
-        return await get_sale_transactions(session, query)
+        return await get_sale_transactions(
+            session,
+            property_type=query.property_type,
+            sido_code=query.sido_code,
+            sigungu_code=query.sigungu_code,
+            deal_ymd=query.deal_ymd,
+            limit=query.limit,
+            offset=query.offset,
+        )
 
 
 @router.get(
@@ -69,7 +77,15 @@ async def get_rent_prop_transactions(
 ) -> list[RentPropTransactionResponse]:
     """전월세 실거래 목록을 조회한다."""
     async with session.begin():
-        return await get_rent_transactions(session, query)
+        return await get_rent_transactions(
+            session,
+            property_type=query.property_type,
+            sido_code=query.sido_code,
+            sigungu_code=query.sigungu_code,
+            deal_ymd=query.deal_ymd,
+            limit=query.limit,
+            offset=query.offset,
+        )
 
 
 @router.get(
@@ -100,7 +116,7 @@ async def get_sale_prop_transaction_detail(
 ) -> SalePropTransactionDetailResponse:
     """매매 실거래 상세 정보를 조회한다."""
     async with session.begin():
-        return await get_sale_transaction_detail(session, transaction_id)
+        return await get_sale_transaction_detail(session, transaction_id=transaction_id)
 
 
 @router.get(
@@ -130,4 +146,4 @@ async def get_rent_prop_transaction_detail(
 ) -> RentPropTransactionDetailResponse:
     """전월세 실거래 상세 정보를 조회한다."""
     async with session.begin():
-        return await get_rent_transaction_detail(session, transaction_id)
+        return await get_rent_transaction_detail(session, transaction_id=transaction_id)
