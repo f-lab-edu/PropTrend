@@ -1,21 +1,14 @@
-import { PROPERTY_TYPE_LABELS, element, formatArea, formatDate, formatWon, transactionTitle } from "/common.js";
+import { element, formatArea, formatDate, formatWon, transactionTitle } from "/common.js";
 
 const container = document.getElementById("price-movers");
 
-// 단지 한 줄. 직전 거래가 최대 10년 전일 수 있어 두 거래의 금액과 계약일을 함께 보여준다.
+// 단지 한 줄. 직전 거래가 최대 5년 전일 수 있어 두 거래의 금액과 계약일을 함께 보여준다.
 function moverItem(mover, rank) {
   const { latest_sale: latest, previous_sale: previous } = mover;
   const rising = mover.change_rate > 0;
 
-  const name = element("p", "min-w-0 truncate font-medium");
-  name.append(
-    element(
-      "span",
-      "mr-1.5 rounded bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700",
-      PROPERTY_TYPE_LABELS[latest.property_type],
-    ),
-    transactionTitle(latest),
-  );
+  // 아파트만 순위에 오르므로 유형 배지 없이 단지명만 보여준다.
+  const name = element("p", "min-w-0 truncate font-medium", transactionTitle(latest));
   // 국내 시세 표기 관례대로 상승은 빨강, 하락은 파랑으로 보여준다.
   const rate = element(
     "p",
@@ -68,8 +61,8 @@ async function loadPriceMovers() {
     document.getElementById("price-movers-title").textContent =
       `거래액 급등·급락 단지 TOP 5 · ${formatDate(movers.base_date)} 기준`;
     container.replaceChildren(
-      moverPanel("급등", movers.surge, "최근 1년 안에 가격이 오른 단지가 없습니다."),
-      moverPanel("급락", movers.plunge, "최근 1년 안에 가격이 내린 단지가 없습니다."),
+      moverPanel("급등", movers.surge, "최근 1년 안에 가격이 오른 아파트 단지가 없습니다."),
+      moverPanel("급락", movers.plunge, "최근 1년 안에 가격이 내린 아파트 단지가 없습니다."),
     );
   } catch (error) {
     // 하루 요약과 따로 불러오므로 실패해도 이 영역에만 안내한다.

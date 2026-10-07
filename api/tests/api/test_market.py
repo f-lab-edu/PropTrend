@@ -220,8 +220,10 @@ class TestGetPriceMovers:
             # 급등: +50, +40, +30, +20(id 작음), +20(id 큼), +10 → 5위까지만 나온다.
             "s1_prev": APT_ROW | {"apartment_serial_number": "11680-2001"} | prev,
             "s1_latest": APT_ROW | {"apartment_serial_number": "11680-2001", "deal_amount": 1_500_000_000} | latest,
-            "s2_prev": OFFICETEL_ROW | {"deal_amount": 200_000_000} | prev,
-            "s2_latest": OFFICETEL_ROW | {"deal_amount": 280_000_000, "floor": 7} | latest,
+            "s2_prev": APT_ROW | {"apartment_serial_number": "11680-2002", "deal_amount": 200_000_000} | prev,
+            "s2_latest": APT_ROW
+            | {"apartment_serial_number": "11680-2002", "deal_amount": 280_000_000, "floor": 7}
+            | latest,
             "s3_prev": APT_ROW | {"apartment_serial_number": "11680-2003"} | prev,
             "s3_latest": APT_ROW | {"apartment_serial_number": "11680-2003", "deal_amount": 1_300_000_000} | latest,
             "s4_prev": APT_ROW | {"apartment_serial_number": "11680-2004"} | prev,
@@ -230,17 +232,17 @@ class TestGetPriceMovers:
             "s5_latest": APT_ROW | {"apartment_serial_number": "11680-2005", "deal_amount": 600_000_000} | latest,
             "s6_prev": APT_ROW | {"apartment_serial_number": "11680-2006"} | prev,
             "s6_latest": APT_ROW | {"apartment_serial_number": "11680-2006", "deal_amount": 1_100_000_000} | latest,
-            # 급락: -33.33(반올림), -20(해제 거래 건너뜀), -10(오피스텔 NULL 키), -5(s1과 같은 단지, 다른 면적).
-            "p1_prev": OFFICETEL_ROW | {"jibun": "300-1", "deal_amount": 300_000_000} | prev,
-            "p1_latest": OFFICETEL_ROW | {"jibun": "300-1", "deal_amount": 200_000_000} | latest,
+            # 급락: -33.33(반올림), -20(해제 거래 건너뜀), -10, -5(s1과 같은 단지, 다른 면적).
+            "p1_prev": APT_ROW | {"apartment_serial_number": "11680-2101", "deal_amount": 300_000_000} | prev,
+            "p1_latest": APT_ROW | {"apartment_serial_number": "11680-2101", "deal_amount": 200_000_000} | latest,
             "p2_prev": APT_ROW | {"apartment_serial_number": "11680-2102"} | prev,
             "p2_latest": APT_ROW
             | {"apartment_serial_number": "11680-2102", "deal_amount": 800_000_000, "deal_date": date(2026, 3, 1)},
             "p2_cancelled": APT_ROW
             | {"apartment_serial_number": "11680-2102", "deal_amount": 3_000_000_000, "cancel_deal_type": "O"}
             | latest,
-            "p3_prev": OFFICETEL_ROW | {"jibun": "400-1", "building_name": None, "deal_amount": 400_000_000} | prev,
-            "p3_latest": OFFICETEL_ROW | {"jibun": "400-1", "building_name": None, "deal_amount": 360_000_000} | latest,
+            "p3_prev": APT_ROW | {"apartment_serial_number": "11680-2103", "deal_amount": 400_000_000} | prev,
+            "p3_latest": APT_ROW | {"apartment_serial_number": "11680-2103", "deal_amount": 360_000_000} | latest,
             "p4_prev": APT_ROW
             | {"apartment_serial_number": "11680-2001", "exclusive_use_area": 59.9, "deal_amount": 600_000_000}
             | {"deal_date": date(2025, 2, 10)},
@@ -250,13 +252,15 @@ class TestGetPriceMovers:
             # 순위에서 빠지는 묶음.
             "single": APT_ROW | {"apartment_serial_number": "11680-2301"} | jump_latest,
             "too_old_prev": APT_ROW
-            | {"apartment_serial_number": "11680-2302", "deal_amount": 100_000_000, "deal_date": date(2016, 10, 4)},
+            | {"apartment_serial_number": "11680-2302", "deal_amount": 100_000_000, "deal_date": date(2021, 10, 4)},
             "too_old_latest": APT_ROW | {"apartment_serial_number": "11680-2302"} | jump_latest,
             "stale_prev": APT_ROW | {"apartment_serial_number": "11680-2303"} | jump_prev,
             "stale_latest": APT_ROW
             | {"apartment_serial_number": "11680-2303", "deal_amount": 1_000_000_000, "deal_date": date(2025, 10, 4)},
             "unchanged_prev": APT_ROW | {"apartment_serial_number": "11680-2304"} | prev,
             "unchanged_latest": APT_ROW | {"apartment_serial_number": "11680-2304"} | latest,
+            "officetel_prev": OFFICETEL_ROW | jump_prev,
+            "officetel_latest": OFFICETEL_ROW | jump_latest,
             "row_house_prev": row_house | jump_prev,
             "row_house_latest": row_house | jump_latest,
             "single_multi_prev": single_multi | jump_prev,
@@ -281,7 +285,7 @@ class TestGetPriceMovers:
     async def test_returns_top_surge_and_plunge(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
     ) -> None:
-        """아파트·오피스텔을 합쳐 변동률 순으로 급등·급락 각 5개까지 주고, 동률이면 최근 거래 id 순이다."""
+        """아파트 단지를 변동률 순으로 급등·급락 각 5개까지 주고, 동률이면 최근 거래 id 순이다."""
         app.dependency_overrides[get_today] = lambda: PRICE_MOVERS_BASE_DATE
 
         response = await client.get(PRICE_MOVERS_URL)
@@ -347,24 +351,8 @@ class TestGetPriceMovers:
         body = response.json()
         ranked_ids = {mover["latest_sale"]["id"] for mover in body["surge"] + body["plunge"]}
         excluded = ("single", "too_old_latest", "stale_latest", "unchanged_latest", "p2_cancelled")
-        excluded += ("row_house_latest", "single_multi_latest", "no_serial_latest")
+        excluded += ("officetel_latest", "row_house_latest", "single_multi_latest", "no_serial_latest")
         assert ranked_ids.isdisjoint(seed[name].id for name in excluded)
-
-    async def test_groups_officetel_with_null_keys(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
-    ) -> None:
-        """건물명이 NULL인 오피스텔도 NULL끼리 한 묶음으로 비교한다."""
-        app.dependency_overrides[get_today] = lambda: PRICE_MOVERS_BASE_DATE
-
-        response = await client.get(PRICE_MOVERS_URL)
-
-        assert response.status_code == 200
-        null_key_mover = next(
-            mover for mover in response.json()["plunge"] if mover["latest_sale"]["id"] == seed["p3_latest"].id
-        )
-        assert null_key_mover["latest_sale"]["property_type"] == "OFFICETEL"
-        assert null_key_mover["latest_sale"]["building_name"] is None
-        assert null_key_mover["previous_sale"]["id"] == seed["p3_prev"].id
 
     async def test_returns_empty_lists_when_no_recent_transaction(
         self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
