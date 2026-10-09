@@ -51,7 +51,8 @@ function badge(text, className) {
 }
 
 function renderSummary(dealType, row) {
-  const kind = dealType === "sales" ? "매매" : isJeonse(row) ? "전세" : "월세";
+  let kind = "매매";
+  if (dealType !== "sales") kind = isJeonse(row) ? "전세" : "월세";
   const badges = [
     badge(PROPERTY_TYPE_LABELS[row.property_type], "bg-slate-100 text-slate-700"),
     badge(kind, "bg-blue-50 text-blue-700"),
@@ -309,9 +310,10 @@ async function main() {
   });
 
   const params = new URLSearchParams(location.search);
-  const dealType = params.get("deal_type");
+  // 주소의 값을 API 경로에 그대로 넣지 않고, 정해진 거래 유형 중 일치하는 것을 골라 쓴다.
+  const dealType = Object.keys(COLUMNS).find((key) => key === params.get("deal_type"));
   const id = params.get("id");
-  if (!Object.hasOwn(COLUMNS, dealType) || !/^\d+$/.test(id ?? "")) {
+  if (!dealType || !/^\d+$/.test(id ?? "")) {
     showMessage(message, "잘못된 주소입니다. 목록에서 거래를 다시 선택하세요.");
     return;
   }

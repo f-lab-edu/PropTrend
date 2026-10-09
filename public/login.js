@@ -38,8 +38,8 @@ form.addEventListener("submit", async (event) => {
 });
 
 // 이미 로그인했으면 폼을 보여줄 필요가 없다. 확인에 실패하면 그대로 로그인 폼을 쓴다.
-fetchMe()
-  .then((user) => {
-    if (user) location.replace(next);
-  })
-  .catch(console.error);
+try {
+  if (await fetchMe()) location.replace(next);
+} catch (error) {
+  console.error(error);
+}

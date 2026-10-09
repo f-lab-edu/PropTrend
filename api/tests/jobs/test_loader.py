@@ -140,6 +140,8 @@ async def test_region_loader_rejects_empty_rows() -> None:
     # 빈 목록으로 확정되면 지역 필터가 사라진다. 예외로 법정동코드 갱신 전체를 되돌린다.
     session = FakeSession()
 
+    loader = RegionLoader(session)
+
     with pytest.raises(ValueError, match="지역 행이 없다"):
-        await RegionLoader(session).load([])
+        await loader.load([])
     assert session.statements == []

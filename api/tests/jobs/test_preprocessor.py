@@ -165,8 +165,11 @@ def test_region_without_sigungu_uses_sido_name() -> None:
 
 @pytest.mark.parametrize("empty", [None, " "])
 def test_region_rejects_blank_name(empty: str | None) -> None:
+    preprocessor = LegalDongCodePreprocessor()
+    items = [legal_dong_item("1171000000", empty)]
+
     with pytest.raises(ValueError, match="locatadd_nm"):
-        LegalDongCodePreprocessor().preprocess([legal_dong_item("1171000000", empty)])
+        preprocessor.preprocess(items)
 
 
 def test_region_rejects_sido_with_two_names() -> None:
@@ -174,9 +177,10 @@ def test_region_rejects_sido_with_two_names() -> None:
         legal_dong_item("1111000000", "서울특별시 종로구"),
         legal_dong_item("1114000000", "서울시 중구"),
     ]
+    preprocessor = LegalDongCodePreprocessor()
 
     with pytest.raises(ValueError, match="시도 11의 이름"):
-        LegalDongCodePreprocessor().preprocess(items)
+        preprocessor.preprocess(items)
 
 
 def test_region_output_keys_match_table_columns() -> None:

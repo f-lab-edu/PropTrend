@@ -15,10 +15,19 @@ export function fetchMe() {
   return mePromise;
 }
 
-// 로그인 뒤 돌아갈 경로. 다른 사이트로 보내지 않도록 같은 사이트의 경로만 받는다.
+// 로그인 뒤 돌아갈 경로. 다른 사이트로 보내지 않도록 같은 출처의 경로만 받는다.
+// 접두어 검사로는 "/\t/evil.com"처럼 브라우저가 탭·줄바꿈을 지우면 "//evil.com"이 되는 값을 막지 못하므로,
+// 브라우저와 같은 규칙으로 해석한 뒤 출처를 비교한다.
 export function safeNext(value) {
-  if (!value?.startsWith("/") || value.startsWith("//") || value.startsWith("/\\")) return "/";
-  return value;
+  if (!value) return "/";
+  let url;
+  try {
+    url = new URL(value, location.origin);
+  } catch {
+    return "/";
+  }
+  if (url.origin !== location.origin) return "/";
+  return url.pathname + url.search + url.hash;
 }
 
 export async function readErrorMessage(response) {

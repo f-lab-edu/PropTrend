@@ -70,8 +70,8 @@ form.addEventListener("submit", async (event) => {
   }
 });
 
-fetchMe()
-  .then((user) => {
-    if (user) location.replace("/");
-  })
-  .catch(console.error);
+try {
+  if (await fetchMe()) location.replace("/");
+} catch (error) {
+  console.error(error);
+}

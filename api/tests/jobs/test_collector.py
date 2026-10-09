@@ -119,9 +119,10 @@ def gateway_error_body(reason_code: str) -> str:
 async def test_gateway_daily_limit_is_daily_limit(mock_api: Any) -> None:
     # 일일 한도를 넘기면 결과코드 22가 아니라 HTTP 429와 게이트웨이 본문의 사유 코드 22로 온다.
     mock_api(responder(gateway_error_body("22"), status_code=429))
+    collector = RtmsDataCollector("https://api.test/rtms", "11110", "202602")
 
     with pytest.raises(DailyLimitReachedError) as error:
-        await RtmsDataCollector("https://api.test/rtms", "11110", "202602").collect()
+        await collector.collect()
 
     assert SERVICE_KEY not in str(error.value)
     assert error.value.__cause__ is None
@@ -131,9 +132,10 @@ async def test_gateway_daily_limit_is_daily_limit(mock_api: Any) -> None:
 async def test_other_http_429_stays_status_error(mock_api: Any, body: str) -> None:
     # 사유 코드가 22가 아니거나 본문을 읽을 수 없는 429는 일일 제한으로 보지 않는다.
     mock_api(responder(body, status_code=429))
+    collector = RtmsDataCollector("https://api.test/rtms", "11110", "202602")
 
     with pytest.raises(OpenApiStatusError) as error:
-        await RtmsDataCollector("https://api.test/rtms", "11110", "202602").collect()
+        await collector.collect()
 
     assert error.value.status_code == 429
 

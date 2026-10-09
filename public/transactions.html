@@ -16,7 +16,7 @@
       <div class="mx-auto flex max-w-7xl items-center justify-between px-4 py-3">
         <a href="/" class="font-bold">부동산 실거래 조회</a>
         <!-- 로그인 여부를 확인하기 전에는 비워 두되 자리를 잡아 버튼이 나타날 때 레이아웃이 밀리지 않게 한다. -->
-        <nav id="auth-nav" class="h-8 min-w-20 text-right"></nav>
+        <nav id="auth-nav" aria-label="계정" class="h-8 min-w-20 text-right"></nav>
       </div>
     </header>
     <main class="mx-auto max-w-7xl px-4 py-8">
@@ -36,7 +36,7 @@
         </table>
       </div>
 
-      <nav id="pagination" class="mt-4 hidden items-center justify-center gap-4 text-sm">
+      <nav id="pagination" aria-label="페이지 이동" class="mt-4 hidden items-center justify-center gap-4 text-sm">
         <a id="prev-page" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5">이전</a>
         <span id="page-number" class="text-slate-600"></span>
         <a id="next-page" class="rounded-lg border border-slate-300 bg-white px-3 py-1.5">다음</a>

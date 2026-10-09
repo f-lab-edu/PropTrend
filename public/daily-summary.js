@@ -27,12 +27,9 @@ function saleCard(label, sale) {
   const card = element("a", `${CARD_CLASS} hover:ring-2 hover:ring-blue-200`);
   card.href = `/transaction.html?${new URLSearchParams({ deal_type: "sales", id: sale.id })}`;
 
-  const area =
-    sale.exclusive_use_area !== null
-      ? `전용 ${formatArea(sale.exclusive_use_area)}`
-      : sale.total_floor_area !== null
-        ? `연면적 ${formatArea(sale.total_floor_area)}`
-        : null;
+  let area = null;
+  if (sale.exclusive_use_area !== null) area = `전용 ${formatArea(sale.exclusive_use_area)}`;
+  else if (sale.total_floor_area !== null) area = `연면적 ${formatArea(sale.total_floor_area)}`;
   const details = [area, sale.floor === null ? null : `${sale.floor}층`].filter(Boolean).join(" · ");
 
   card.append(

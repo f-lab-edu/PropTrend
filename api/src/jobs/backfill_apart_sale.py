@@ -15,7 +15,6 @@ import logging
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 from dotenv import load_dotenv
 from sqlalchemy import and_, func, or_, select
@@ -27,6 +26,7 @@ from .__main__ import EXIT_FAILED, EXIT_OK, bounded_int
 from .context import UnitContextFilter, unit_context
 from .lock import advisory_lock
 from .pipeline import SPEC_BY_API_ID, refresh_unit
+from .utils import parse_deal_ymd, split_sgg_cd
 
 logger = logging.getLogger(__name__)
 
@@ -39,11 +39,16 @@ DEFAULT_LIMIT = 10000
 PROGRESS_PATH = Path(__file__).resolve().parents[2] / "results" / "backfill_apart_sale.json"
 
 
-def read_progress() -> dict[str, Any] | None:
-    """마지막으로 성공한 단위 기록. 처음 실행이면 None."""
+def read_progress() -> dict[str, str] | None:
+    """마지막으로 성공한 단위의 좌표를 읽는다. 처음 실행이면 None."""
     if not PROGRESS_PATH.exists():
         return None
-    return json.loads(PROGRESS_PATH.read_text(encoding="utf-8"))
+    last = json.loads(PROGRESS_PATH.read_text(encoding="utf-8"))["last_collected"]
+    # 진행 기록은 손으로 고칠 수 있는 파일이다. 형식을 확인한 뒤 숫자에서 다시 만들어
+    # 파일 원문이 SQL 비교·로그·다음 진행 기록에 그대로 흘러가지 않게 한다.
+    split_sgg_cd(last["lawd_cd"])
+    parse_deal_ymd(last["deal_ymd"])
+    return {"lawd_cd": f"{int(last['lawd_cd']):05d}", "deal_ymd": f"{int(last['deal_ymd']):06d}"}
 
 
 def write_progress(lawd_cd: str, deal_ymd: str, collected: int, stopped_reason: str | None = None) -> None:
@@ -142,8 +147,7 @@ async def main() -> int:
                 logger.error("다른 프로세스가 갱신 중이라 재수집을 하지 못했다", extra={"stage": "lock_busy"})
                 return EXIT_FAILED
 
-            progress = read_progress()
-            after = progress["last_collected"] if progress else None
+            after = read_progress()
             total, coordinates = await pending_units(args.limit, after)
             logger.info(
                 "aptSeq 없는 아파트 매매 %d단위 중 %d단위를 재수집한다 (이어서 시작: %s)",
