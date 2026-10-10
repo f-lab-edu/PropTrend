@@ -3,14 +3,21 @@
 import logging
 from typing import Any, ClassVar
 
-from sqlalchemy import insert
+from sqlalchemy import func, insert, or_, text
+from sqlalchemy.dialects.postgresql import Insert
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..model import (
+    COMPLEX_INDEX_WHERE,
+    COMPLEX_KEY_COLUMNS,
     LEGAL_DONG_CODE_KNOWN_FIELDS,
     RTMS_KNOWN_FIELDS,
     Base,
+    Complex,
     LegalDongCodeRawItem,
+    PropertyType,
+    Region,
     RentTransaction,
     RTMSRawItem,
     SaleTransaction,
@@ -19,6 +26,17 @@ from ..model import (
 logger = logging.getLogger(__name__)
 
 CHUNK_SIZE = 1000
+
+# 정제 테이블 row에서 단지로 옮기는 컬럼.
+COMPLEX_COLUMNS = (
+    "sido_code",
+    "sigungu_code",
+    "umd_name",
+    "jibun",
+    "building_name",
+    "build_year",
+    "apartment_serial_number",
+)
 
 
 def _warn_schema_drift(api_id: str, items: list[dict[str, Any]], known: frozenset[str]) -> None:
@@ -87,6 +105,22 @@ class LegalDongCodeRawItemLoader:
         return loaded
 
 
+class RegionLoader:
+    """전처리기가 넘긴 시도·시군구 행을 regions에 적재한다."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def load(self, rows: list[dict[str, Any]]) -> int:
+        # 전처리에서 전부 걸러진 채 확정되면 지역 필터가 통째로 사라진다. 예외로 bronze 교체까지 되돌린다.
+        if not rows:
+            raise ValueError("적재할 지역 행이 없다")
+
+        loaded = await _insert_chunked(self.session, Region.__table__, rows)
+        logger.debug("지역 silver 적재 완료", extra={"stage": "load_region", "loaded": loaded})
+        return loaded
+
+
 class TransactionLoader:
     """전처리기가 넘긴 row를 정제 테이블에 적재한다."""
 
@@ -126,3 +160,55 @@ class SaleTransactionLoader(TransactionLoader):
 
 class RentTransactionLoader(TransactionLoader):
     model = RentTransaction
+
+
+def with_complex_conflict(statement: Insert, property_type: PropertyType) -> Insert:
+    """단지 insert 문에 유형별 충돌 처리를 붙인다. 이미 있는 단지는 새로 만들지 않는다."""
+    table = Complex.__table__
+    key_columns = COMPLEX_KEY_COLUMNS[property_type]
+    conflict_target = {"index_elements": key_columns, "index_where": text(COMPLEX_INDEX_WHERE[property_type])}
+    if property_type == PropertyType.APT:
+        # 단지명은 과거 거래까지 소급해 바뀐다. 키가 아닌 속성은 최근 거래 값으로 맞추되,
+        # 매일 같은 값으로 덮어 updated_at과 행 버전만 쌓이지 않도록 달라졌을 때만 고친다.
+        updatable = [column for column in COMPLEX_COLUMNS if column not in key_columns]
+        return statement.on_conflict_do_update(
+            **conflict_target,
+            set_={column: statement.excluded[column] for column in updatable} | {"updated_at": func.now()},
+            where=or_(*(table.c[column].is_distinct_from(statement.excluded[column]) for column in updatable)),
+        )
+    # 오피스텔은 키 컬럼이 곧 속성 전부라 고칠 값이 없다.
+    return statement.on_conflict_do_nothing(**conflict_target)
+
+
+class ComplexLoader:
+    """정제 테이블에 적재한 row에서 단지를 뽑아 complexes에 upsert한다."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def load(self, property_type: PropertyType, rows: list[dict[str, Any]]) -> int:
+        """단지별로 가장 최근 거래의 속성을 upsert하고, upsert를 시도한 단지 수를 반환한다."""
+        key_columns = COMPLEX_KEY_COLUMNS[property_type]
+        latest: dict[tuple[Any, ...], dict[str, Any]] = {}
+        for row in rows:
+            # 상세 자료로 재수집되기 전의 아파트 매매는 단지 일련번호가 없어 단지를 특정할 수 없다.
+            if property_type == PropertyType.APT and row["apartment_serial_number"] is None:
+                continue
+            key = tuple(row[column] for column in key_columns)
+            if key not in latest or row["deal_date"] > latest[key]["deal_date"]:
+                latest[key] = row
+
+        # 같은 단지를 upsert하는 단위가 동시에 돌 때 행 락을 서로 다른 순서로 잡아 데드락이 나지 않게 키 순으로 넣는다.
+        # NULL과 값을 직접 비교하면 TypeError가 나므로 NULL 여부를 먼저 비교한다.
+        ordered = sorted(latest.items(), key=lambda item: tuple((value is not None, value) for value in item[0]))
+        complexes = [
+            {"property_type": property_type} | {column: row[column] for column in COMPLEX_COLUMNS} for _, row in ordered
+        ]
+
+        if complexes:
+            statement = with_complex_conflict(pg_insert(Complex.__table__), property_type)
+            for start in range(0, len(complexes), CHUNK_SIZE):
+                await self.session.execute(statement, complexes[start : start + CHUNK_SIZE])
+
+        logger.debug("단지 upsert 완료", extra={"stage": "load_complex", "loaded": len(complexes)})
+        return len(complexes)

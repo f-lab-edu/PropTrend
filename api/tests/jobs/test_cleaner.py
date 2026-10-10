@@ -4,7 +4,7 @@ from datetime import date
 from typing import Any
 
 import pytest
-from sqlalchemy import Delete
+from sqlalchemy import Delete, Table
 from sqlalchemy.sql.elements import BooleanClauseList
 
 from src.jobs.cleaner import (
@@ -21,6 +21,7 @@ from tests.jobs.conftest import FakeSession
 def where_conditions(statement: Delete) -> list[tuple[str, str, Any]]:
     """DELETE의 WHERE 절을 `(컬럼, 연산자, 값)` 목록으로 펼친다."""
     clause = statement.whereclause
+    assert clause is not None
     parts = clause.clauses if isinstance(clause, BooleanClauseList) else [clause]
     return [(part.left.name, part.operator.__name__, part.right.value) for part in parts]
 
@@ -41,6 +42,7 @@ async def test_clean_scopes_to_type_month_and_sigungu(cleaner: type[TransactionC
     await cleaner(session).clean(PropertyType.APT, "202302", "11110")
 
     statement = only_statement(session)
+    assert isinstance(statement.table, Table)
     assert statement.table.name == table
     # property_type이 빠지면 아파트 갱신이 같은 표의 다른 유형까지 지운다.
     assert where_conditions(statement) == [
@@ -97,6 +99,7 @@ async def test_bronze_clean_targets_the_keys_the_loader_wrote() -> None:
     await RTMSRawItemCleaner(clean_session, "apart_sale").clean(deal_ymd, lawd_cd)
 
     statement = only_statement(clean_session)
+    assert isinstance(statement.table, Table)
     assert statement.table.name == "rtms_raw_items"
     # 적재기가 넣는 값과 모양이 어긋나면 삭제가 빈손으로 끝나고 재적재분이 그대로 중복된다.
     assert where_conditions(statement) == [

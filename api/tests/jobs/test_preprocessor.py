@@ -7,8 +7,8 @@ from typing import Any
 import pytest
 
 from src.jobs.loader import RentTransactionLoader, SaleTransactionLoader
-from src.jobs.preprocessor import RentPreprocessor, SalePreprocessor
-from src.model import PropertyType
+from src.jobs.preprocessor import LegalDongCodePreprocessor, RentPreprocessor, SalePreprocessor
+from src.model import PropertyType, Region
 from tests.jobs.conftest import FakeSession, bronze_rows, rent_payload, sale_payload
 
 
@@ -22,6 +22,11 @@ def rent(**overrides: Any) -> dict[str, Any]:
     """아파트 전월세 전처리기로 payload 하나를 변환한다."""
     processor = RentPreprocessor(PropertyType.APT, "apart_rent", "aptNm")
     return processor.preprocess(bronze_rows(rent_payload(**overrides)))[0]
+
+
+def legal_dong_item(region_cd: str, locatadd_nm: str | None) -> dict[str, Any]:
+    """법정동코드 시군구 행에서 지역 전처리기가 읽는 필드만 채운다."""
+    return {"region_cd": region_cd, "locatadd_nm": locatadd_nm}
 
 
 def test_common_columns_are_normalized() -> None:
@@ -57,6 +62,12 @@ def test_sale_amount_becomes_won() -> None:
 @pytest.mark.parametrize(("value", "expected"), [("26.02.27", date(2026, 2, 27)), (" ", None)])
 def test_sale_short_date_is_parsed(value: str, expected: date | None) -> None:
     assert sale(cdealDay=value)["cancel_deal_date"] == expected
+
+
+@pytest.mark.parametrize(("value", "expected"), [("11110-2339", "11110-2339"), (" ", None), (None, None)])
+def test_sale_apartment_serial_number_is_kept(value: str | None, expected: str | None) -> None:
+    # 상세 자료 API의 aptSeq를 옮긴다. 기본 API로 받은 bronze에는 키가 없어 NULL이 된다.
+    assert sale(aptSeq=value)["apartment_serial_number"] == expected
 
 
 def test_rent_amounts_become_won() -> None:
@@ -114,3 +125,65 @@ def test_unparsable_amount_points_at_bronze_row() -> None:
 def test_output_keys_match_table_columns(row: dict[str, Any], loader: type) -> None:
     # 전처리기와 모델이 어긋나면 적재기가 런타임에야 막는다. 여기서 먼저 잡는다.
     assert row.keys() == loader(FakeSession()).columns
+
+
+def test_region_splits_codes_and_names() -> None:
+    rows = LegalDongCodePreprocessor().preprocess([legal_dong_item("1171000000", "서울특별시 송파구")])
+
+    assert rows == [{"sido_code": "11", "sigungu_code": "710", "sido_name": "서울특별시", "sigungu_name": "송파구"}]
+
+
+def test_region_excludes_city_with_general_districts() -> None:
+    # 일반구를 둔 시는 빼고, 구는 시 이름까지 붙여 둔다.
+    items = [
+        legal_dong_item("4111000000", "경기도 수원시"),
+        legal_dong_item("4111100000", "경기도 수원시 장안구"),
+    ]
+
+    rows = LegalDongCodePreprocessor().preprocess(items)
+
+    assert [(row["sigungu_code"], row["sigungu_name"]) for row in rows] == [("111", "수원시 장안구")]
+
+
+def test_region_keeps_regions_sharing_code_prefix() -> None:
+    # 영동군(740)과 증평군(745)은 코드 앞자리가 같지만 상하위가 아니다.
+    items = [
+        legal_dong_item("4374000000", "충청북도 영동군"),
+        legal_dong_item("4374500000", "충청북도 증평군"),
+    ]
+
+    rows = LegalDongCodePreprocessor().preprocess(items)
+
+    assert [row["sigungu_code"] for row in rows] == ["740", "745"]
+
+
+def test_region_without_sigungu_uses_sido_name() -> None:
+    rows = LegalDongCodePreprocessor().preprocess([legal_dong_item("3611000000", "세종특별자치시")])
+
+    assert (rows[0]["sido_name"], rows[0]["sigungu_name"]) == ("세종특별자치시", "세종특별자치시")
+
+
+@pytest.mark.parametrize("empty", [None, " "])
+def test_region_rejects_blank_name(empty: str | None) -> None:
+    preprocessor = LegalDongCodePreprocessor()
+    items = [legal_dong_item("1171000000", empty)]
+
+    with pytest.raises(ValueError, match="locatadd_nm"):
+        preprocessor.preprocess(items)
+
+
+def test_region_rejects_sido_with_two_names() -> None:
+    items = [
+        legal_dong_item("1111000000", "서울특별시 종로구"),
+        legal_dong_item("1114000000", "서울시 중구"),
+    ]
+    preprocessor = LegalDongCodePreprocessor()
+
+    with pytest.raises(ValueError, match="시도 11의 이름"):
+        preprocessor.preprocess(items)
+
+
+def test_region_output_keys_match_table_columns() -> None:
+    rows = LegalDongCodePreprocessor().preprocess([legal_dong_item("1171000000", "서울특별시 송파구")])
+
+    assert rows[0].keys() == {column.name for column in Region.__table__.columns}

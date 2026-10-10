@@ -179,6 +179,14 @@ def _fakes(harness: Harness) -> dict[str, Any]:
             harness.record("load_bronze", lawd_cd)
             return len(items)
 
+    class ComplexLoader:
+        def __init__(self, session: FakeSession) -> None:
+            pass
+
+        async def load(self, property_type: PropertyType, rows: list[dict[str, Any]]) -> int:
+            harness.record("load_complex", rows[0]["lawd_cd"] if rows else "")
+            return len(rows)
+
     class RTMSRawItemCollector:
         def __init__(self, session: FakeSession, api_id: str) -> None:
             pass
@@ -195,6 +203,7 @@ def _fakes(harness: Harness) -> dict[str, Any]:
         "RTMSRawItemCleaner": RTMSRawItemCleaner,
         "RTMSRawItemLoader": RTMSRawItemLoader,
         "RTMSRawItemCollector": RTMSRawItemCollector,
+        "ComplexLoader": ComplexLoader,
         "RefreshUnitStateStore": _fake_state_store(harness),
     } | _fake_silver(harness)
 
@@ -216,6 +225,7 @@ def harness(monkeypatch: pytest.MonkeyPatch) -> Harness:
         "RTMSRawItemCleaner",
         "RTMSRawItemLoader",
         "RTMSRawItemCollector",
+        "ComplexLoader",
         "RefreshUnitStateStore",
     ):
         monkeypatch.setattr(pipeline, name, fakes[name])
@@ -252,9 +262,22 @@ async def test_refresh_unit_runs_stages_in_order(harness: Harness) -> None:
         "preprocess",
         "clean_silver",
         "load_silver",
+        "load_complex",
         "clear_state",
     ]
     assert result == UnitResult("테스트 매매", "11110", "202602", RAW_DELETED, API_ITEMS, SILVER_DELETED, BRONZE_ROWS)
+
+
+async def test_process_unit_skips_complex_for_non_complex_types(harness: Harness) -> None:
+    # 연립다세대·단독다가구는 단지를 만들지 않는다.
+    spec = SaleSpec(
+        "테스트 연립다세대 매매", PropertyType.ROW_HOUSE, "https://api.test/rtms", "multiflex_sale", "mhouseNm"
+    )
+
+    await pipeline.process_unit(spec, "11110", "202602")
+
+    assert "load_silver" in harness.stages("11110")
+    assert "load_complex" not in harness.stages("11110")
 
 
 async def test_refresh_unit_validates_deal_ymd_before_calling_api(harness: Harness) -> None:
@@ -366,7 +389,14 @@ async def test_state_write_failure_does_not_mask_the_original_error(
 async def test_refresh_units_runs_silver_only_by_default(harness: Harness) -> None:
     summary = await pipeline.refresh_units([(harness.spec, "11110", "202602")], concurrency=1)
 
-    assert harness.stages("11110") == ["read_bronze", "preprocess", "clean_silver", "load_silver", "clear_state"]
+    assert harness.stages("11110") == [
+        "read_bronze",
+        "preprocess",
+        "clean_silver",
+        "load_silver",
+        "load_complex",
+        "clear_state",
+    ]
     assert harness.count("collect_api") == 0
     assert (summary["succeeded"], summary["silver_recovered"]) == (1, 1)
 
@@ -461,7 +491,8 @@ def _api_summary(caplog: pytest.LogCaptureFixture) -> dict[str, dict[str, int]]:
     """회차 끝에 한 번 나가는 API별 집계 레코드."""
     records = [record for record in caplog.records if getattr(record, "stage", None) == "api_summary"]
     assert len(records) == 1
-    return records[0].by_api
+    # extra로 붙은 필드라 LogRecord 타입에 없다.
+    return records[0].__dict__["by_api"]
 
 
 async def test_api_summary_splits_counters_per_spec(

@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>내 정보</title>
+    <!-- 빌드 없이 쓰는 Tailwind 브라우저 빌드. 런타임에 CSS를 만들므로 운영 배포 전에는 standalone CLI로 대체한다. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.min.js"
+      integrity="sha384-aJ9rL4k6lF+91guGvUFVSkpIcge7Zd9EiI4TQDLoK9kFaFJgKHgjEXVvG/qA5COj"
+      crossorigin="anonymous"></script>
+    <script type="module" src="/auth.js"></script>
+    <script type="module" src="/me.js"></script>
+  </head>
+  <body class="min-h-screen bg-slate-50 text-slate-900">
+    <header class="border-b border-slate-200 bg-white">
+      <div class="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
+        <a href="/" class="font-bold">부동산 실거래 조회</a>
+        <!-- 로그인 여부를 확인하기 전에는 비워 두되 자리를 잡아 버튼이 나타날 때 레이아웃이 밀리지 않게 한다. -->
+        <nav id="auth-nav" aria-label="계정" class="h-8 min-w-20 text-right"></nav>
+      </div>
+    </header>
+    <main class="mx-auto max-w-md px-4 py-12">
+      <h1 class="mb-6 text-2xl font-bold">내 정보</h1>
+
+      <p id="message" class="hidden rounded-lg bg-white p-6 text-center text-sm text-slate-500 shadow-sm"></p>
+
+      <section id="profile" class="hidden rounded-xl bg-white p-6 shadow-sm">
+        <dl class="grid grid-cols-[auto_1fr] gap-x-6 gap-y-3 text-sm">
+          <dt class="text-slate-500">닉네임</dt>
+          <dd id="nickname" class="font-medium"></dd>
+          <dt class="text-slate-500">이메일</dt>
+          <dd id="email" class="font-medium break-all"></dd>
+          <dt class="text-slate-500">가입일</dt>
+          <dd id="created-at" class="font-medium"></dd>
+        </dl>
+
+        <p id="logout-message" class="mt-4 hidden text-sm text-red-600"></p>
+        <button
+          id="logout"
+          type="button"
+          class="mt-6 w-full rounded-lg border border-slate-300 bg-white px-4 py-2 font-semibold hover:bg-slate-100 disabled:text-slate-400"
+        >
+          로그아웃
+        </button>
+      </section>
+
+      <section id="favorites" class="mt-6 hidden rounded-xl bg-white p-6 shadow-sm">
+        <h2 class="text-lg font-semibold">즐겨찾기한 단지</h2>
+        <p id="favorites-error" class="mt-4 hidden text-sm text-red-600"></p>
+        <ul id="favorite-list" class="mt-2 divide-y divide-slate-100"></ul>
+        <p id="favorites-message" class="hidden py-6 text-center text-sm text-slate-500"></p>
+      </section>
+    </main>
+  </body>
+</html>

@@ -1,12 +1,14 @@
 """적재기의 입력 검증과 스키마 드리프트 경고."""
 
 import logging
+from datetime import date
 from typing import Any
 
 import pytest
 
 from src.jobs import loader as loader_module
-from src.jobs.loader import RTMSRawItemLoader, SaleTransactionLoader
+from src.jobs.loader import ComplexLoader, RegionLoader, RTMSRawItemLoader, SaleTransactionLoader
+from src.model import PropertyType
 from tests.jobs.conftest import FakeSession
 
 
@@ -73,3 +75,73 @@ async def test_warns_on_schema_drift(caplog: pytest.LogCaptureFixture) -> None:
     messages = [record.getMessage() for record in caplog.records]
     assert any("기준선에 없는 필드가 왔다" in message and "newField" in message for message in messages)
     assert any("기준선에 있던 필드가 응답에 없다" in message and "aptNm" in message for message in messages)
+
+
+def complex_source_row(**overrides: Any) -> dict[str, Any]:
+    """단지 적재기가 읽는 컬럼만 채운 정제 row."""
+    return {
+        "sido_code": "11",
+        "sigungu_code": "110",
+        "umd_name": "청운동",
+        "jibun": "1",
+        "building_name": "청운현대",
+        "build_year": 2000,
+        "apartment_serial_number": "11110-1",
+        "deal_date": date(2026, 2, 1),
+    } | overrides
+
+
+async def test_complex_loader_skips_empty_rows() -> None:
+    session = FakeSession()
+
+    assert await ComplexLoader(session).load(PropertyType.APT, []) == 0
+    assert session.statements == []
+
+
+async def test_complex_loader_keeps_latest_attributes_per_apartment() -> None:
+    session = FakeSession()
+    rows = [
+        complex_source_row(building_name="옛이름", deal_date=date(2026, 2, 1)),
+        complex_source_row(building_name="새이름", deal_date=date(2026, 2, 20)),
+        complex_source_row(apartment_serial_number="11110-2", building_name="다른단지"),
+        # 상세 자료로 재수집되기 전의 매매는 단지를 특정할 수 없다.
+        complex_source_row(apartment_serial_number=None, building_name="일련번호없음"),
+    ]
+
+    loaded = await ComplexLoader(session).load(PropertyType.APT, rows)
+
+    assert loaded == 2
+    ((_, params),) = session.statements
+    assert [(row["apartment_serial_number"], row["building_name"]) for row in params] == [
+        ("11110-1", "새이름"),
+        ("11110-2", "다른단지"),
+    ]
+    assert all(row["property_type"] == PropertyType.APT for row in params)
+    assert "deal_date" not in params[0]
+
+
+async def test_complex_loader_groups_officetel_with_null_keys() -> None:
+    session = FakeSession()
+    rows = [
+        complex_source_row(apartment_serial_number=None, jibun=None),
+        complex_source_row(apartment_serial_number=None, jibun=None, deal_date=date(2026, 2, 20)),
+        complex_source_row(apartment_serial_number=None, jibun="2"),
+    ]
+
+    loaded = await ComplexLoader(session).load(PropertyType.OFFICETEL, rows)
+
+    # 지번이 빈 두 거래는 같은 단지로 묶이고, NULL이 값보다 앞에 정렬된다.
+    assert loaded == 2
+    ((_, params),) = session.statements
+    assert [row["jibun"] for row in params] == [None, "2"]
+
+
+async def test_region_loader_rejects_empty_rows() -> None:
+    # 빈 목록으로 확정되면 지역 필터가 사라진다. 예외로 법정동코드 갱신 전체를 되돌린다.
+    session = FakeSession()
+
+    loader = RegionLoader(session)
+
+    with pytest.raises(ValueError, match="지역 행이 없다"):
+        await loader.load([])
+    assert session.statements == []
