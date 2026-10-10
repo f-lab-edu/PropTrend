@@ -231,7 +231,7 @@ async def test_empty_worklist_still_reports_stuck_units(run_main: RunMain, caplo
 
     # 빈 목록이 "다 끝났다"로 읽히면 상한에 걸린 단위가 영영 방치된다.
     assert (exit_code, calls) == (EXIT_OK, [])
-    assert any(record.stuck_units == 1 for record in caplog.records)
+    assert any(getattr(record, "stuck_units", None) == 1 for record in caplog.records)
 
 
 async def test_targeted_failure_is_reported(run_main: RunMain) -> None:

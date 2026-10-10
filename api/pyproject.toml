@@ -56,8 +56,16 @@ classmethod-decorators = ["sqlalchemy.orm.declared_attr.directive"]
 # 테스트는 assert로 단언하고 기대값을 리터럴로 적는다.
 "tests/**" = ["S101", "PLR2004"]
 
+[tool.pyright]
+# scripts의 두 배치는 api의 sqlalchemy와 모델을 쓰고 api 가상환경에서 돌므로 여기서 함께 검사한다.
+include = ["src", "tests", "../scripts/src/load_results.py", "../scripts/src/process_silver.py"]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+
 [dependency-groups]
 dev = [
+    "pyright>=1.1.414",
     "pytest>=9.1.1",
     "pytest-asyncio>=1.4.0",
     "ruff>=0.16.10",

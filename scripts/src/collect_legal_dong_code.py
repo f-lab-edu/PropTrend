@@ -73,7 +73,8 @@ def collect_rows(service_key: str) -> tuple[list[dict[str, str]], dict[str, str]
             break
         rows.extend(row_to_dict(row) for row in page_rows)
 
-        total_count = int(root.findtext("./head/totalCount"))
+        # 기본값을 0으로 두면 totalCount가 빠진 응답에서 첫 페이지만 받고 조용히 끝난다.
+        total_count = int(root.findtext("./head/totalCount", ""))
         if page_no * MAX_ROWS_PER_PAGE >= total_count:
             break
         page_no += 1

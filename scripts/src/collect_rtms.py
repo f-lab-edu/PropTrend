@@ -163,7 +163,7 @@ def resume_start_index(work_items: list[tuple[str, str]], api_id: str) -> int:
         return 0
 
     last_completed = progress.get("last_completed") or {}
-    target = (last_completed.get("yyyymm"), last_completed.get("region_code"))
+    target = (last_completed.get("yyyymm", ""), last_completed.get("region_code", ""))
 
     try:
         return work_items.index(target) + 1

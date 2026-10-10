@@ -9,9 +9,10 @@
 import asyncio
 import logging
 import time
+from typing import Any, cast
 
 from dotenv import load_dotenv
-from sqlalchemy import literal, select, union_all
+from sqlalchemy import CursorResult, literal, select, union_all
 from sqlalchemy.dialects.postgresql import insert
 
 from ..db import dispose_engine, session_scope
@@ -47,7 +48,7 @@ async def backfill(property_type: PropertyType) -> int:
 
     statement = insert(Complex.__table__).from_select(["property_type", *COMPLEX_COLUMNS], complexes)
     async with session_scope() as session:
-        result = await session.execute(with_complex_conflict(statement, property_type))
+        result = cast(CursorResult[Any], await session.execute(with_complex_conflict(statement, property_type)))
     return result.rowcount
 
 

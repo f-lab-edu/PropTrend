@@ -491,7 +491,8 @@ def _api_summary(caplog: pytest.LogCaptureFixture) -> dict[str, dict[str, int]]:
     """회차 끝에 한 번 나가는 API별 집계 레코드."""
     records = [record for record in caplog.records if getattr(record, "stage", None) == "api_summary"]
     assert len(records) == 1
-    return records[0].by_api
+    # extra로 붙은 필드라 LogRecord 타입에 없다.
+    return records[0].__dict__["by_api"]
 
 
 async def test_api_summary_splits_counters_per_spec(

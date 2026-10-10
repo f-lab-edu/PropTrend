@@ -86,7 +86,7 @@ async def pending_units(limit: int, after: dict[str, str] | None) -> tuple[int, 
         .subquery()
     )
     async with session_scope() as session:
-        total = await session.scalar(select(func.count()).select_from(statement))
+        total = (await session.execute(select(func.count()).select_from(statement))).scalar_one()
         result = await session.execute(
             select(statement.c.lawd_cd, statement.c.deal_ymd)
             .order_by(statement.c.deal_ymd.desc(), statement.c.lawd_cd)

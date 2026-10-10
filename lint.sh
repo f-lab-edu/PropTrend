@@ -21,6 +21,11 @@ uv run --project api --frozen --no-build ruff format --check . || status=1
 echo "==> ruff check"
 uv run --project api --frozen --no-build ruff check . || status=1
 
+echo "==> pyright (타입 체크)"
+# api와 scripts는 가상환경이 달라 각 프로젝트에서 따로 돈다. 검사 범위는 각 pyproject.toml에 있다.
+(cd api && uv run --frozen --no-build pyright) || status=1
+(cd scripts && uv run --frozen --no-build pyright) || status=1
+
 echo "==> 파이프라인 경계 (파이프라인·모델 계층이 웹 계층을 참조하지 않는다)"
 # 파이프라인은 API 서버와 별개 프로세스로 돈다. 같은 패키지 안에 있어 임포트를 막는
 # 것이 없으므로, 웹 계층으로 되돌아가는 의존이 생기지 않았는지 여기서 확인한다.
