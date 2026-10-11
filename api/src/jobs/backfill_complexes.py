@@ -21,6 +21,7 @@ from ..model import COMPLEX_PROPERTY_TYPES, Complex, PropertyType, RentTransacti
 from .__main__ import EXIT_FAILED, EXIT_OK
 from .loader import COMPLEX_COLUMNS, with_complex_conflict
 from .lock import advisory_lock
+from .pipeline import PIPELINES
 
 logger = logging.getLogger(__name__)
 
@@ -55,8 +56,9 @@ async def backfill(property_type: PropertyType) -> int:
 async def main() -> int:
     configure_logging("pipeline")
     try:
-        # 정기 갱신과 같은 락을 쓴다. 정제 테이블이 갈아끼워지는 도중의 구간을 읽지 않게 한다.
-        async with advisory_lock() as acquired:
+        # 단지를 만드는 유형의 갱신과 같은 범위를 쓴다. 정제 테이블이 갈아끼워지는 도중의 구간을 읽지 않게 한다.
+        scopes = [spec.api_id for spec in PIPELINES if spec.property_type in COMPLEX_PROPERTY_TYPES]
+        async with advisory_lock(*scopes) as acquired:
             if not acquired:
                 logger.error("다른 프로세스가 갱신 중이라 단지를 채우지 못했다", extra={"stage": "lock_busy"})
                 return EXIT_FAILED

@@ -141,8 +141,8 @@ async def main() -> int:
     args = parse_args()
     configure_logging("pipeline", filters=[UnitContextFilter()])
     try:
-        # 정기 갱신과 같은 락을 쓴다. 같은 구간의 DELETE/INSERT가 교차하지 않게 한다.
-        async with advisory_lock() as acquired:
+        # 정기 갱신의 아파트 매매와 같은 범위를 쓴다. 같은 구간의 DELETE/INSERT가 교차하지 않게 한다.
+        async with advisory_lock(API_ID) as acquired:
             if not acquired:
                 logger.error("다른 프로세스가 갱신 중이라 재수집을 하지 못했다", extra={"stage": "lock_busy"})
                 return EXIT_FAILED

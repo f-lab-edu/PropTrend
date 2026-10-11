@@ -543,6 +543,78 @@ async def test_api_summary_totals_match_the_summary(
         assert sum(counters.get(key, 0) for counters in by_api.values()) == summary[key], key
 
 
+def _record_legal_dong(monkeypatch: pytest.MonkeyPatch, harness: Harness) -> None:
+    """법정동코드 교체를 부를 때마다 호출 기록에 남긴다."""
+
+    async def refresh_legal_dong_codes() -> int:
+        harness.record("legal_dong", "")
+        return 0
+
+    monkeypatch.setattr(pipeline, "refresh_legal_dong_codes", refresh_legal_dong_codes)
+
+
+async def test_refresh_all_replaces_legal_dong_codes_first(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _record_legal_dong(monkeypatch, harness)
+
+    await pipeline.refresh_all(months=1, concurrency=1)
+
+    # 시군구 목록이 그 회차에 교체된 법정동코드에서 나와야 한다.
+    assert harness.calls[0] == ("legal_dong", "")
+
+
+async def test_refresh_specs_runs_only_the_given_specs(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    _two_specs(monkeypatch, harness)
+    _record_legal_dong(monkeypatch, harness)
+
+    with caplog.at_level(logging.INFO, logger="src.jobs.pipeline"):
+        summary = await pipeline.refresh_specs((SECOND_SPEC,), months=1, concurrency=1)
+
+    # 유형별 실행이 법정동코드까지 받으면 같은 회차에 교체가 유형 수만큼 겹친다.
+    assert harness.count("legal_dong") == 0
+    assert summary["units"] == len(SIGUNGU)
+    assert set(_api_summary(caplog)) == {SECOND_SPEC.api_id}
+
+
+async def test_refresh_specs_fails_without_sigungu(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    async def no_sigungu() -> list[str]:
+        return []
+
+    monkeypatch.setattr(pipeline, "sigungu_codes", no_sigungu)
+
+    # 0단위로 끝나면 아무것도 갱신하지 않고 성공으로 보인다.
+    with pytest.raises(RuntimeError, match="시군구 목록이 비어 있다"):
+        await pipeline.refresh_specs((harness.spec,), months=1, concurrency=1)
+    assert harness.count("collect_api") == 0
+
+
+async def test_refresh_specs_counts_only_its_own_leftovers(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _two_specs(monkeypatch, harness)
+    harness.leftovers = [
+        UnitRecord(harness.spec.api_id, "11110", "202602", UnitStatus.COLLECTED, 1),
+        UnitRecord(SECOND_SPEC.api_id, "11110", "202602", UnitStatus.COLLECTED, MAX_ATTEMPTS),
+    ]
+
+    summary = await pipeline.refresh_specs((harness.spec,), months=1, concurrency=1)
+
+    # 유형별 실행이 각자 상태 표 전체를 세면 같은 경고가 실행 수만큼 겹친다.
+    assert (summary["pending_units"], summary["stuck_units"]) == (1, 0)
+
+
+async def test_refresh_units_counts_every_leftover(harness: Harness, monkeypatch: pytest.MonkeyPatch) -> None:
+    _two_specs(monkeypatch, harness)
+    harness.leftovers = [
+        UnitRecord(harness.spec.api_id, "11110", "202602", UnitStatus.COLLECTED, 1),
+        UnitRecord(SECOND_SPEC.api_id, "11110", "202602", UnitStatus.COLLECTED, 1),
+    ]
+
+    summary = await pipeline.refresh_units([(harness.spec, "11110", "202602")], concurrency=1)
+
+    # 지정 재실행은 사람이 남은 일을 확인하는 자리라 유형으로 거르지 않는다.
+    assert summary["pending_units"] == len(harness.leftovers)
+
+
 def test_recent_months_walks_backwards_across_the_year() -> None:
     assert recent_months(3, date(2026, 1, 15)) == ["202601", "202512", "202511"]
 
@@ -552,6 +624,15 @@ def test_recent_months_rejects_out_of_range(months: int) -> None:
     # 반복 횟수를 정하는 값이라 호출부가 아니라 여기서 막아야 한다.
     with pytest.raises(ValueError, match="months는"):
         recent_months(months)
+
+
+def test_iter_units_takes_only_the_given_specs() -> None:
+    specs = (SPEC_BY_API_ID["officetel_rent"],)
+
+    units = list(iter_units(["11110", "11140"], ["202602"], specs))
+
+    assert {spec for spec, _, _ in units} == set(specs)
+    assert len(units) == 2
 
 
 def test_iter_units_visits_newest_month_first() -> None:

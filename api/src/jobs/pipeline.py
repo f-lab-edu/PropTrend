@@ -4,7 +4,7 @@ import asyncio
 import logging
 import time
 from collections import Counter
-from collections.abc import AsyncGenerator, Iterator, Sequence
+from collections.abc import AsyncGenerator, Collection, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import date
@@ -313,11 +313,15 @@ def recent_months(months: int = DEFAULT_MONTHS, today: date | None = None) -> li
     return result
 
 
-def iter_units(sgg_list: Sequence[str], month_list: Sequence[str]) -> Iterator[tuple[PipelineSpec, str, str]]:
+def iter_units(
+    sgg_list: Sequence[str],
+    month_list: Sequence[str],
+    specs: Sequence[PipelineSpec] = PIPELINES,
+) -> Iterator[tuple[PipelineSpec, str, str]]:
     """갱신 단위를 최신 월부터 훑는다. 중간에 잘려도 최근 데이터가 먼저 반영된다."""
     for deal_ymd in month_list:
         for lawd_cd in sgg_list:
-            for spec in PIPELINES:
+            for spec in specs:
                 yield spec, lawd_cd, deal_ymd
 
 
@@ -487,12 +491,13 @@ async def stuck_units() -> list[UnitRecord]:
     return [record for record in await _leftover_units() if record.attempts >= MAX_ATTEMPTS]
 
 
-async def _finish_run(tally: RunTally, run_started: float) -> None:
-    """상태 표를 세어 요약에 붙이고 회차 종료 로그를 남긴다."""
+async def _finish_run(tally: RunTally, run_started: float, api_ids: Collection[str] | None = None) -> None:
+    """상태 표를 세어 요약에 붙이고 회차 종료 로그를 남긴다. `api_ids`를 주면 그 유형의 단위만 센다."""
     summary = tally.summary
     leftovers: list[UnitRecord] = []
     try:
-        leftovers = await _leftover_units()
+        # 유형별로 갈린 실행이 각자 상태 표 전체를 세면 같은 미완 단위 경고가 실행 수만큼 겹쳐 나간다.
+        leftovers = [record for record in await _leftover_units() if api_ids is None or record.api_id in api_ids]
     except Exception:
         # 다 끝난 회차를 집계 실패로 뒤집지 않는다. 두 키가 빠진 것이 곧 "못 셌다"는 표시다.
         logger.exception("상태 표를 세지 못했다", extra={"stage": "state_count_failed"})
@@ -535,24 +540,36 @@ async def _finish_run(tally: RunTally, run_started: float) -> None:
 
 
 async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_CONCURRENCY) -> dict[str, int]:
-    """하루치 갱신 전체. 스케줄러에 등록되는 작업은 이 함수 하나다."""
-    run_started = time.perf_counter()
+    """하루치 갱신 전체. 법정동코드를 교체한 뒤 8종을 모두 돈다."""
     await refresh_legal_dong_codes()
+    return await refresh_specs(PIPELINES, months, concurrency)
+
+
+async def refresh_specs(
+    specs: Sequence[PipelineSpec],
+    months: int = DEFAULT_MONTHS,
+    concurrency: int = DEFAULT_CONCURRENCY,
+) -> dict[str, int]:
+    """법정동코드를 받지 않고, 이미 있는 시군구 목록으로 지정한 유형만 갱신한다."""
+    run_started = time.perf_counter()
     sgg_list = await sigungu_codes()
+    if not sgg_list:
+        # 0단위로 끝나면 성공으로 보인다. 법정동코드가 한 번도 적재되지 않은 DB다.
+        raise RuntimeError("시군구 목록이 비어 있다. 법정동코드를 먼저 적재해야 한다")
     month_list = recent_months(months)
 
-    units = list(iter_units(sgg_list, month_list))
+    units = list(iter_units(sgg_list, month_list, specs))
     logger.info(
         "갱신 시작: 시군구 %d × %d개월 × %d종 = %d단위",
         len(sgg_list),
         len(month_list),
-        len(PIPELINES),
+        len(specs),
         len(units),
         extra={
             "stage": "refresh_start",
             "sigungu": len(sgg_list),
             "months": len(month_list),
-            "specs": len(PIPELINES),
+            "specs": len(specs),
             "units": len(units),
             "concurrency": concurrency,
         },
@@ -566,7 +583,7 @@ async def refresh_all(months: int = DEFAULT_MONTHS, concurrency: int = DEFAULT_C
     if silver_retry:
         await _silver_pass(silver_retry, tally, semaphore)
 
-    await _finish_run(tally, run_started)
+    await _finish_run(tally, run_started, api_ids={spec.api_id for spec in specs})
     return tally.summary
 
 

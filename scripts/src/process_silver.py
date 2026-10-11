@@ -195,8 +195,8 @@ async def run() -> int:
     if args.dry_run:
         return await _process_all(specs, args)
 
-    # 갱신 파이프라인과 같은 락을 잡는다. 같은 달을 동시에 지우고 넣으면 한쪽 결과가 중복되거나 사라진다.
-    async with advisory_lock() as acquired:
+    # 갱신 파이프라인과 같은 유형 범위를 잡는다. 같은 달을 동시에 지우고 넣으면 한쪽 결과가 중복되거나 사라진다.
+    async with advisory_lock(*(spec.api_id for spec in specs)) as acquired:
         if not acquired:
             logger.error("갱신 파이프라인이 돌고 있어 시작하지 않습니다. 끝난 뒤 다시 실행하세요")
             return EXIT_LOCK_BUSY

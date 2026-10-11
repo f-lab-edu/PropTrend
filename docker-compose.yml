@@ -20,6 +20,8 @@ services:
 
   api:
     build: ./api
+    # Airflow의 rtms_daily DAG가 같은 이미지를 갱신 파이프라인(python -m src.jobs)으로 띄운다. 태그를 고정해 둔다.
+    image: prop-trend-api:latest
     container_name: prop-trend-api
     restart: unless-stopped
     # api/.env는 읽지 않는다. 오픈API 인증키는 파이프라인만 쓰고, 접속 주소는 아래에서 준다.

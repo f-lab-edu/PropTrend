@@ -4,15 +4,17 @@
 
 - 코드 포맷팅: `uv run ruff format .`
 - 코드 린팅: `uv run ruff check --fix .`
-- 타입 체크: `api/`와 `scripts/`에서 각각 `uv run pyright` — 두 프로젝트는 가상환경이 달라 따로 실행합니다.
+- 타입 체크: `api/`, `scripts/`, `airflow/`에서 각각 `uv run pyright` — 세 프로젝트는 가상환경이 달라 따로 실행합니다.
 - 전체 검사(포맷·린트·타입·중복): `./lint.sh` — SonarCloud 봇이 PR에서 보는 항목을 미리 확인합니다. PR마다 GitHub Actions(`.github/workflows/lint.yml`)에서도 실행됩니다.
-- 테스트: `uv run pytest`
+- 테스트: `api/`와 `airflow/`에서 각각 `uv run pytest`
 - 코드를 수정한 뒤에는 반드시 포맷팅과 린팅을 실행해 통과를 확인합니다.
 
 ## Project structure
 
 - `api/src/jobs`는 API 서버와 별개 프로세스(`python -m src.jobs`)로 도는 갱신 파이프라인입니다. `backfill_*.py`는 1회성 백필 배치로 완료 후 삭제 예정입니다.
 - `scripts/`는 공공데이터 원본 수집·bronze 적재용 별도 uv 프로젝트로, api를 import하지 않습니다.
+- `airflow/`는 갱신 파이프라인을 조율하는 Airflow DAG의 별도 uv 프로젝트입니다. DAG는 `src`를 import하지 않고 jobs 이미지를 DockerOperator로 띄워 CLI 인자로만 이야기하며, `api/src`도 Airflow를 import하지 않습니다. `lint.sh`가 이를 검사합니다.
+- DAG의 `API_IDS`와 `airflow/pools.json`은 `api/src/jobs/pipeline.py`의 `PIPELINES`와 같아야 하므로, 유형을 더하거나 바꾸면 함께 수정합니다. `airflow/pyproject.toml`의 Airflow 버전은 `airflow/docker-compose.yml`의 이미지와 맞춥니다.
 - `api/src/jobs`, `api/src/model`, `api/src/db.py`는 웹 계층(fastapi, starlette, `main`)을 참조하지 않습니다. `lint.sh`가 이를 검사합니다.
 - `scripts/`는 `api/src/model/raw.py`, `api/src/model/load_progress.py`와 DDL을 따로 갖고 있으므로, 해당 모델이 바뀌면 스크립트도 함께 수정합니다.
 
