@@ -63,6 +63,7 @@ uvx --no-build --from "shellcheck-py==${SHELLCHECK_VERSION}" shellcheck lint.sh 
 echo "==> hadolint (Dockerfile)"
 if command -v docker >/dev/null 2>&1; then
     docker run --rm -i "$HADOLINT_IMAGE" hadolint - < api/Dockerfile || status=1
+    docker run --rm -i "$HADOLINT_IMAGE" hadolint - < airflow/Dockerfile || status=1
 else
     echo "docker가 없어 건너뜁니다."
 fi

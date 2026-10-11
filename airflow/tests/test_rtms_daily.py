@@ -1,13 +1,17 @@
 """정기 갱신 DAG의 구조. 태스크 상태 규칙이 어긋나면 실패가 조용히 묻힌다."""
 
 import json
+from datetime import timedelta
 from pathlib import Path
 
+import httpx
 import pytest
 from airflow.dag_processing.dagbag import DagBag
 from airflow.providers.docker.operators.docker import DockerOperator
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
+from airflow.sdk.exceptions import AirflowSkipException
+from rtms_daily import LEGAL_DONG_ROWS_PER_PAGE, fetch_legal_dong_rows
 
 AIRFLOW_DIR = Path(__file__).resolve().parents[1]
 DAGS_DIR = AIRFLOW_DIR / "dags"
@@ -85,24 +89,28 @@ def test_api_tasks_run_even_if_legal_dong_fails(dag: DAG) -> None:
         assert task.trigger_rule == "all_done"
 
 
-def test_legal_dong_task_only_replaces_codes(dag: DAG) -> None:
-    assert docker_task(dag, "refresh_legal_dong").command == ["python", "-m", "src.jobs", "--legal-dong-only"]
+def test_legal_dong_runs_natively_with_timeout(dag: DAG) -> None:
+    task = dag.get_task("refresh_legal_dong")
+
+    # 컨테이너 없이 태스크가 직접 오픈API와 DB를 다룬다.
+    assert isinstance(task, PythonOperator)
+    assert task.execution_timeout == timedelta(minutes=10)
 
 
 def test_every_container_maps_exit_99_to_skipped(dag: DAG) -> None:
-    for task_id in ["refresh_legal_dong", *API_TASK_IDS]:
+    for task_id in API_TASK_IDS:
         # 한도 소진·락 대기를 실패로 두면 재시도가 같은 응답에 호출량만 쓴다.
         assert 99 in docker_task(dag, task_id).skip_on_exit_code
 
 
 def test_containers_are_force_removed(dag: DAG) -> None:
-    for task_id in ["refresh_legal_dong", *API_TASK_IDS]:
+    for task_id in API_TASK_IDS:
         # "success"면 타임아웃 뒤에도 컨테이너가 끝까지 돌아 execution_timeout이 일을 멈추지 못한다.
         assert docker_task(dag, task_id).auto_remove == "force"
 
 
 def test_secrets_stay_out_of_rendered_environment(dag: DAG) -> None:
-    for task_id in ["refresh_legal_dong", *API_TASK_IDS]:
+    for task_id in API_TASK_IDS:
         task = docker_task(dag, task_id)
 
         # environment는 템플릿으로 렌더링돼 UI에 보인다. 비밀값은 private_environment에만 있어야 한다.
@@ -111,7 +119,7 @@ def test_secrets_stay_out_of_rendered_environment(dag: DAG) -> None:
 
 
 def test_containers_do_not_share_environment(dag: DAG) -> None:
-    environments = [docker_task(dag, task_id).environment for task_id in ["refresh_legal_dong", *API_TASK_IDS]]
+    environments = [docker_task(dag, task_id).environment for task_id in API_TASK_IDS]
 
     # 연산자가 실행 중에 environment를 고치므로 한 dict를 나눠 쓰면 서로의 값이 섞인다.
     assert len({id(environment) for environment in environments}) == len(environments)
@@ -155,3 +163,89 @@ def test_missing_secret_is_an_import_error(monkeypatch: pytest.MonkeyPatch) -> N
 
     # 빈 값으로 컨테이너가 뜨면 첫 호출에서야 실패한다. 파싱에서 막혀야 UI에 바로 보인다.
     assert load_dagbag().import_errors
+
+
+def legal_dong_row(region_cd: str) -> str:
+    """법정동코드 응답의 row 하나. 코드 자릿수에서 시도·시군구·읍면동·리를 나눈다."""
+    return (
+        f"<row><region_cd>{region_cd}</region_cd><sido_cd>{region_cd[:2]}</sido_cd>"
+        f"<sgg_cd>{region_cd[2:5]}</sgg_cd><umd_cd>{region_cd[5:8]}</umd_cd><ri_cd>{region_cd[8:]}</ri_cd>"
+        "<locat_rm/></row>"
+    )
+
+
+def legal_dong_page(total_count: int, *region_cds: str, result_code: str = "INFO-0") -> str:
+    return (
+        f"<StanReginCd><head><totalCount>{total_count}</totalCount>"
+        f"<RESULT><resultCode>{result_code}</resultCode><resultMsg>NORMAL SERVICE</resultMsg></RESULT></head>"
+        f"{''.join(legal_dong_row(code) for code in region_cds)}</StanReginCd>"
+    )
+
+
+def mock_client(*responses: httpx.Response) -> tuple[httpx.Client, list[httpx.Request]]:
+    """요청을 순서대로 받아 준비한 응답을 돌려주는 클라이언트."""
+    requests: list[httpx.Request] = []
+    pending = list(responses)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        return pending.pop(0)
+
+    return httpx.Client(transport=httpx.MockTransport(handler)), requests
+
+
+def test_legal_dong_keeps_only_sigungu_rows_across_pages() -> None:
+    client, requests = mock_client(
+        # 시도(11), 시군구(11110), 읍면동(11110101)이 섞여 온다.
+        httpx.Response(200, text=legal_dong_page(LEGAL_DONG_ROWS_PER_PAGE + 1, "1100000000", "1111000000")),
+        httpx.Response(200, text=legal_dong_page(LEGAL_DONG_ROWS_PER_PAGE + 1, "1111010100", "1114000000")),
+    )
+
+    rows = fetch_legal_dong_rows(client, "test-key")
+
+    assert [row["region_cd"] for row in rows] == ["1111000000", "1114000000"]
+    assert [request.url.params["pageNo"] for request in requests] == ["1", "2"]
+    # 빈 태그는 None으로 담겨야 기존 bronze payload와 모양이 같다.
+    assert rows[0]["locat_rm"] is None
+
+
+def test_legal_dong_without_sigungu_rows_is_an_error() -> None:
+    client, _ = mock_client(httpx.Response(200, text=legal_dong_page(0, result_code="INFO-200")))
+
+    # 빈 목록으로 표를 갈아끼우면 실거래 갱신이 시군구 목록을 잃는다.
+    with pytest.raises(RuntimeError, match="시군구 행이 없다"):
+        fetch_legal_dong_rows(client, "test-key")
+
+
+def test_legal_dong_error_result_code_is_an_error() -> None:
+    client, _ = mock_client(
+        httpx.Response(
+            200, text="<StanReginCd><resultCode>ERROR-290</resultCode><resultMsg>KEY</resultMsg></StanReginCd>"
+        )
+    )
+
+    with pytest.raises(RuntimeError, match="ERROR-290"):
+        fetch_legal_dong_rows(client, "test-key")
+
+
+def test_legal_dong_daily_limit_is_skipped() -> None:
+    gateway_body = (
+        "<OpenAPI_ServiceResponse><cmmMsgHeader>"
+        "<returnReasonCode>22</returnReasonCode>"
+        "</cmmMsgHeader></OpenAPI_ServiceResponse>"
+    )
+    client, _ = mock_client(httpx.Response(429, text=gateway_body))
+
+    # 재시도해도 같은 응답이라 실패가 아니라 건너뜀이어야 한다.
+    with pytest.raises(AirflowSkipException):
+        fetch_legal_dong_rows(client, "test-key")
+
+
+def test_legal_dong_http_error_hides_service_key() -> None:
+    client, _ = mock_client(httpx.Response(500, text="Internal Server Error"))
+
+    with pytest.raises(RuntimeError) as error:
+        fetch_legal_dong_rows(client, "secret-service-key")
+
+    # 예외 메시지는 태스크 로그에 그대로 찍힌다.
+    assert "secret-service-key" not in str(error.value)
