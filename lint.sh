@@ -37,15 +37,15 @@ if grep -rnE --include="*.py" "fastapi|starlette|from \\.\\.?main\\b" \
 fi
 
 echo "==> Airflow 경계 (파이프라인은 Airflow를 모르고, DAG는 파이프라인 코드를 import하지 않는다)"
-# Airflow를 걷어내도 python -m src.jobs가 그대로 돌아야 한다. DAG는 컨테이너 인자로만 jobs와
-# 이야기한다. 서로 다른 가상환경이라 import가 실패하긴 하지만, 그 실패는 실행 시점에야 드러난다.
+# 전환이 끝날 때까지 python -m src.jobs도 그대로 돌아야 한다. DAG는 옮겨 온 코드만 쓴다.
+# 서로 다른 가상환경이라 import가 실패하긴 하지만, 그 실패는 실행 시점에야 드러난다.
 # 주석에 이름이 나오는 것은 허용하도록 import 문만 본다.
 if grep -rnE --include="*.py" "^[[:space:]]*(from|import)[[:space:]]+airflow([[:space:].]|$)" api/src scripts/src; then
     echo "위 파일은 Airflow를 몰라야 합니다. 임포트를 걷어내세요."
     status=1
 fi
 if grep -rnE --include="*.py" "^[[:space:]]*(from|import)[[:space:]]+src([[:space:].]|$)" airflow/dags; then
-    echo "DAG는 api의 src를 import하지 않습니다. 필요한 값은 CLI 인자로 넘기세요."
+    echo "DAG는 api의 src를 import하지 않습니다. 필요한 코드는 DAG 쪽으로 옮기세요."
     status=1
 fi
 

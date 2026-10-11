@@ -20,7 +20,6 @@ services:
 
   api:
     build: ./api
-    # Airflow의 rtms_daily DAG가 같은 이미지를 갱신 파이프라인(python -m src.jobs)으로 띄운다. 태그를 고정해 둔다.
     image: prop-trend-api:latest
     container_name: prop-trend-api
     restart: unless-stopped
