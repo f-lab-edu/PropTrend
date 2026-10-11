@@ -45,7 +45,7 @@ LAWD_CD_PATTERN = re.compile(r"^\d{5}$")
 KST = timezone(timedelta(hours=9))
 
 API_CONFIGS = [
-    ("apart_sale", "https://apis.data.go.kr/1613000/RTMSDataSvcAptTrade/getRTMSDataSvcAptTrade"),
+    ("apart_sale", "https://apis.data.go.kr/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev"),
     ("apart_rent", "https://apis.data.go.kr/1613000/RTMSDataSvcAptRent/getRTMSDataSvcAptRent"),
     ("officetel_sale", "https://apis.data.go.kr/1613000/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade"),
     ("officetel_rent", "https://apis.data.go.kr/1613000/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent"),
@@ -163,7 +163,7 @@ def resume_start_index(work_items: list[tuple[str, str]], api_id: str) -> int:
         return 0
 
     last_completed = progress.get("last_completed") or {}
-    target = (last_completed.get("yyyymm"), last_completed.get("region_code"))
+    target = (last_completed.get("yyyymm", ""), last_completed.get("region_code", ""))
 
     try:
         return work_items.index(target) + 1

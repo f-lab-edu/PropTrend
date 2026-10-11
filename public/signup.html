@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>회원가입</title>
+    <!-- 빌드 없이 쓰는 Tailwind 브라우저 빌드. 런타임에 CSS를 만들므로 운영 배포 전에는 standalone CLI로 대체한다. -->
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4.3.3/dist/index.global.min.js"
+      integrity="sha384-aJ9rL4k6lF+91guGvUFVSkpIcge7Zd9EiI4TQDLoK9kFaFJgKHgjEXVvG/qA5COj"
+      crossorigin="anonymous"></script>
+    <script type="module" src="/signup.js"></script>
+  </head>
+  <body class="min-h-screen bg-slate-50 text-slate-900">
+    <header class="border-b border-slate-200 bg-white">
+      <div class="mx-auto flex max-w-6xl items-center px-4 py-3">
+        <a href="/" class="font-bold">부동산 실거래 조회</a>
+      </div>
+    </header>
+    <main class="mx-auto max-w-sm px-4 py-12">
+      <h1 class="mb-6 text-2xl font-bold">회원가입</h1>
+
+      <!-- 길이 제한은 API의 SignUpRequest 스키마와 맞춘다. -->
+      <form id="signup-form" class="flex flex-col gap-4 rounded-xl bg-white p-6 shadow-sm">
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          이메일
+          <input
+            name="email"
+            type="email"
+            maxlength="255"
+            autocomplete="email"
+            required
+            class="rounded-lg border border-slate-300 px-3 py-2"
+          />
+          <span data-error-for="email" class="hidden text-xs font-normal text-red-600"></span>
+        </label>
+
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          닉네임
+          <input
+            name="nickname"
+            minlength="2"
+            maxlength="30"
+            autocomplete="nickname"
+            required
+            class="rounded-lg border border-slate-300 px-3 py-2"
+          />
+          <span class="text-xs font-normal text-slate-500">2~30자</span>
+          <span data-error-for="nickname" class="hidden text-xs font-normal text-red-600"></span>
+        </label>
+
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          비밀번호
+          <input
+            name="password"
+            type="password"
+            minlength="8"
+            maxlength="64"
+            autocomplete="new-password"
+            required
+            class="rounded-lg border border-slate-300 px-3 py-2"
+          />
+          <span class="text-xs font-normal text-slate-500">8~64자</span>
+          <span data-error-for="password" class="hidden text-xs font-normal text-red-600"></span>
+        </label>
+
+        <label class="flex flex-col gap-1 text-sm font-medium">
+          비밀번호 확인
+          <input
+            name="password_confirm"
+            type="password"
+            autocomplete="new-password"
+            required
+            class="rounded-lg border border-slate-300 px-3 py-2"
+          />
+          <span data-error-for="password_confirm" class="hidden text-xs font-normal text-red-600"></span>
+        </label>
+
+        <p id="message" class="hidden text-sm text-red-600"></p>
+
+        <button
+          id="submit"
+          type="submit"
+          class="rounded-lg bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700 disabled:bg-slate-300"
+        >
+          가입하기
+        </button>
+      </form>
+
+      <p class="mt-4 text-center text-sm text-slate-500">
+        이미 계정이 있나요?
+        <a href="/login.html" class="font-medium text-blue-600 hover:underline">로그인</a>
+      </p>
+    </main>
+  </body>
+</html>

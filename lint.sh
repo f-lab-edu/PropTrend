@@ -7,18 +7,24 @@
 # (SonarCloud shell:S8541, shell:S6505).
 set -uo pipefail
 
-RUFF_VERSION=0.16.7
 JSCPD_VERSION=5.2.0
 SHELLCHECK_VERSION=0.11.0.1
 HADOLINT_IMAGE=hadolint/hadolint:v2.12.0-alpine
 
 status=0
 
+# ruff는 pytest처럼 api의 dev 의존성 그룹에 고정돼 있어 uv.lock이 버전을 정한다.
+# --project로 실행 환경만 api에서 가져오고 검사 대상은 저장소 전체(.)로 둔다.
 echo "==> ruff format"
-uvx --no-build "ruff@${RUFF_VERSION}" format --check . || status=1
+uv run --project api --frozen --no-build ruff format --check . || status=1
 
 echo "==> ruff check"
-uvx --no-build "ruff@${RUFF_VERSION}" check . || status=1
+uv run --project api --frozen --no-build ruff check . || status=1
+
+echo "==> pyright (타입 체크)"
+# api와 scripts는 가상환경이 달라 각 프로젝트에서 따로 돈다. 검사 범위는 각 pyproject.toml에 있다.
+(cd api && uv run --frozen --no-build pyright) || status=1
+(cd scripts && uv run --frozen --no-build pyright) || status=1
 
 echo "==> 파이프라인 경계 (파이프라인·모델 계층이 웹 계층을 참조하지 않는다)"
 # 파이프라인은 API 서버와 별개 프로세스로 돈다. 같은 패키지 안에 있어 임포트를 막는

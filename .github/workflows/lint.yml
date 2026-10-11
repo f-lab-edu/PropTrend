@@ -1,0 +1,59 @@
+name: Lint
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# 같은 PR에 커밋이 연달아 올라오면 앞선 실행은 결과를 볼 일이 없으므로 취소한다.
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+
+    # pytest 픽스처가 이 서버에 테스트 DB를 직접 만든다. 계정은 TEST_DATABASE_URL 기본값과 맞춘다.
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    # action은 lint.sh의 도구처럼 버전을 고정한다. 태그는 옮겨질 수 있어 커밋 SHA로 고정한다.
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+        with:
+          version: "0.12.23"
+          python-version: "3.14"
+          enable-cache: true
+          cache-dependency-glob: "**/uv.lock"
+
+      # jscpd 실행용
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: "24"
+
+      - name: Install dependencies
+        run: |
+          uv sync --project api --frozen --no-build
+          uv sync --project scripts --frozen --no-build
+
+      - name: Run lint.sh
+        run: ./lint.sh

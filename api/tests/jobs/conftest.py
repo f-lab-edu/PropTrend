@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import pytest
+from sqlalchemy import RowMapping
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from src.jobs import collector
 
@@ -42,9 +44,11 @@ def rent_payload(**overrides: Any) -> dict[str, Any]:
     return rtms_payload(**({"deposit": "30,000", "monthlyRent": "0"} | overrides))
 
 
-def bronze_rows(*payloads: dict[str, Any], start_id: int = 1) -> list[dict[str, Any]]:
+def bronze_rows(*payloads: dict[str, Any], start_id: int = 1) -> list[RowMapping]:
     """수집기가 돌려주는 `id`/`payload` 매핑 모양으로 감싼다."""
-    return [{"id": start_id + index, "payload": payload} for index, payload in enumerate(payloads)]
+    # 전처리기는 키로 읽기만 하므로 dict로 RowMapping을 대신한다.
+    rows = [{"id": start_id + index, "payload": payload} for index, payload in enumerate(payloads)]
+    return cast(list[RowMapping], rows)
 
 
 class FakeResult:
@@ -61,9 +65,10 @@ class FakeResult:
         return self._rows
 
 
-class FakeSession:
+class FakeSession(AsyncSession):
     """실행된 문장을 모아두는 가짜 AsyncSession. 파이프라인이 세션에 쓰는 API는 execute뿐이다."""
 
+    # 상속은 AsyncSession 자리에 넘기기 위한 것이다. 부모 __init__을 부르지 않아 엔진 없이 만들어진다.
     def __init__(self, rowcount: int = 0, rows: Sequence[Any] = ()) -> None:
         self.statements: list[Any] = []
         self._rowcount = rowcount

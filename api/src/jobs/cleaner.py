@@ -1,15 +1,16 @@
 """재적재에 앞서 갱신 단위의 기존 데이터를 지우는 정리기."""
 
 import logging
-from typing import ClassVar
+from typing import Any, ClassVar, cast
 
-from sqlalchemy import delete
+from sqlalchemy import CursorResult, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..model import (
     Base,
     LegalDongCodeRawItem,
     PropertyType,
+    Region,
     RentTransaction,
     RTMSRawItem,
     SaleTransaction,
@@ -42,7 +43,7 @@ class TransactionCleaner:
             conditions.append(table.c.sido_code == sido_code)
             conditions.append(table.c.sigungu_code == sigungu_code)
 
-        result = await self.session.execute(delete(table).where(*conditions))
+        result = cast(CursorResult[Any], await self.session.execute(delete(table).where(*conditions)))
         logger.debug(
             "부동산 실거래 silver 데이터 단위 정리 완료",
             extra={"stage": "clean_silver", "table": self.model.__tablename__, "deleted": result.rowcount},
@@ -77,12 +78,15 @@ class RTMSRawItemCleaner:
         # api_id는 적재기가 화이트리스트로 막으므로 없는 값이 표에 들어와 있을 수 없다.
 
         table = RTMSRawItem.__table__
-        result = await self.session.execute(
-            delete(table).where(
-                table.c.api_id == self.api_id,
-                table.c.deal_ymd == deal_ymd,
-                table.c.lawd_cd == lawd_cd,
-            )
+        result = cast(
+            CursorResult[Any],
+            await self.session.execute(
+                delete(table).where(
+                    table.c.api_id == self.api_id,
+                    table.c.deal_ymd == deal_ymd,
+                    table.c.lawd_cd == lawd_cd,
+                )
+            ),
         )
         logger.debug(
             "부동산 실거래 bronze 데이터 단위 정리 완료", extra={"stage": "clean_bronze", "deleted": result.rowcount}
@@ -99,8 +103,21 @@ class LegalDongCodeRawItemCleaner:
     async def clean(self) -> int:
         # 갱신 단위 키가 없는 API라 전량 교체뿐이다. 비운 직후 같은 트랜잭션에서 반드시
         # 다시 채워야 한다. 시군구 목록의 출처라 비어 있으면 이후 갱신이 통째로 멈춘다.
-        result = await self.session.execute(delete(LegalDongCodeRawItem.__table__))
+        result = cast(CursorResult[Any], await self.session.execute(delete(LegalDongCodeRawItem.__table__)))
         logger.debug(
             "법정동코드 bronze 데이터 정리 완료", extra={"stage": "clean_legal_dong", "deleted": result.rowcount}
         )
+        return result.rowcount
+
+
+class RegionCleaner:
+    """regions를 통째로 비운다."""
+
+    def __init__(self, session: AsyncSession) -> None:
+        self.session = session
+
+    async def clean(self) -> int:
+        # 법정동코드 bronze와 같은 트랜잭션에서 비우고 채운다. 사이에서 끊기면 지역 필터가 사라진다.
+        result = cast(CursorResult[Any], await self.session.execute(delete(Region.__table__)))
+        logger.debug("지역 silver 데이터 정리 완료", extra={"stage": "clean_region", "deleted": result.rowcount})
         return result.rowcount

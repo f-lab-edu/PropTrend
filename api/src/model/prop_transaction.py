@@ -107,6 +107,9 @@ class TransactionMixin:
     # (10,4)로는 넘친다. 실측 최대 123,101.43(smf_rent).
     total_floor_area: Mapped[float | None] = mapped_column(Numeric(14, 4), sort_order=-1)
 
+    # 단지 일련번호(aptSeq). 아파트만. 매매는 상세 자료 API로 재수집되기 전의 행이 NULL이다.
+    apartment_serial_number: Mapped[str | None] = mapped_column(String(20), sort_order=-1)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), sort_order=100)
 
 
@@ -177,8 +180,6 @@ class RentTransaction(Base, TransactionMixin):
 
     # 시군구명. 오피스텔 전월세만.
     sigungu_name: Mapped[str | None] = mapped_column(String(30))
-    # 단지 일련번호. 아파트 전월세만.
-    apartment_serial_number: Mapped[str | None] = mapped_column(String(20))
 
     # 도로명주소 상세. 아파트 전월세에만 있는 7개 필드(roadnm/roadnmsggcd/
     # roadnmcd/roadnmseq/roadnmbcd/roadnmbonbun/roadnmbubun)를 컬럼으로 늘리는
