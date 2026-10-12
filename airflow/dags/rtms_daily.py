@@ -1,21 +1,30 @@
-"""실거래 정기 갱신. 법정동코드와 실거래 8종의 오픈API 응답을 bronze 표에 갈아끼운다."""
+"""실거래 정기 갱신. 법정동코드와 실거래 8종의 오픈API 응답을 bronze 표에 갈아끼우고 정제 테이블로 옮긴다."""
 
 import json
 import logging
 import time
 import zlib
 from contextlib import closing
-from datetime import timedelta
-from typing import Any, cast
+from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
+from typing import Any, NamedTuple, cast
 from xml.etree.ElementTree import ParseError
 
 import httpx
 import pendulum
+
+# [Airflow] provider 패키지(apache-airflow-providers-postgres)의 Hook. Connection 하나를 받아 DB 커넥션을 만들어 준다.
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+
+# [Airflow] airflow.sdk는 Airflow 3에서 DAG 작성자가 쓰는 공개 인터페이스다. 내부 모듈 대신 여기서 가져온다.
+# BaseHook은 Connection 조회, TriggerRule은 상류 상태에 따른 실행 조건, dag·task는 TaskFlow 데코레이터다.
 from airflow.sdk import BaseHook, TriggerRule, dag, task
+
+# [Airflow] 태스크 안에서 던지면 실패가 아니라 skipped 상태로 끝나고 재시도도 하지 않는다.
 from airflow.sdk.exceptions import AirflowSkipException
 from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 
+# [Airflow] 태스크 실행 중 표준 logging으로 남긴 로그는 Airflow가 가로채 UI의 태스크 로그에 보여 준다.
 log = logging.getLogger(__name__)
 
 # httpx는 INFO에서 요청 URL을 통째로 남기는데, 오픈API 인증키가 쿼리 문자열에 실린다.
@@ -25,20 +34,32 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 # 실거래가 오픈API 8종은 같은 서비스(1613000) 아래 오퍼레이션 이름만 다르다.
 RTMS_API = "https://apis.data.go.kr/1613000"
 
+
+class RtmsApi(NamedTuple):
+    """실거래가 API 하나의 호출 주소와 정제 테이블로 옮기는 방식."""
+
+    url: str
+    # api/src/model/prop_transaction.py의 PropertyType 값. 정제 테이블의 property_type 컬럼에 그대로 들어간다.
+    property_type: str
+    is_sale: bool
+    # 건물명 필드 이름은 유형마다 다르고, 단독·다가구에는 아예 없다.
+    building_name_field: str | None = None
+
+
 # api/src/jobs/pipeline.py의 PIPELINES와 같아야 한다. DAG는 src를 import하지 않으므로 따로 든다.
 # 키는 rtms_raw_items.api_id에 그대로 들어가는 슬러그다. 오타가 나면 silver가 그 행을 영영 못 찾는다.
-RTMS_API_URLS = {
+RTMS_APIS = {
     # 단지 일련번호(aptSeq)는 상세 자료 API에만 있다. 나머지 필드는 기본 API와 같다.
-    "apart_sale": f"{RTMS_API}/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev",
-    "apart_rent": f"{RTMS_API}/RTMSDataSvcAptRent/getRTMSDataSvcAptRent",
-    "officetel_sale": f"{RTMS_API}/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade",
-    "officetel_rent": f"{RTMS_API}/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent",
-    "multiflex_sale": f"{RTMS_API}/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade",
-    "multiflex_rent": f"{RTMS_API}/RTMSDataSvcRHRent/getRTMSDataSvcRHRent",
-    "single_multi_family_sale": f"{RTMS_API}/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade",
-    "single_multi_family_rent": f"{RTMS_API}/RTMSDataSvcSHRent/getRTMSDataSvcSHRent",
+    "apart_sale": RtmsApi(f"{RTMS_API}/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev", "APT", True, "aptNm"),
+    "apart_rent": RtmsApi(f"{RTMS_API}/RTMSDataSvcAptRent/getRTMSDataSvcAptRent", "APT", False, "aptNm"),
+    "officetel_sale": RtmsApi(f"{RTMS_API}/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade", "OFFICETEL", True, "offiNm"),
+    "officetel_rent": RtmsApi(f"{RTMS_API}/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent", "OFFICETEL", False, "offiNm"),
+    "multiflex_sale": RtmsApi(f"{RTMS_API}/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade", "ROW_HOUSE", True, "mhouseNm"),
+    "multiflex_rent": RtmsApi(f"{RTMS_API}/RTMSDataSvcRHRent/getRTMSDataSvcRHRent", "ROW_HOUSE", False, "mhouseNm"),
+    "single_multi_family_sale": RtmsApi(f"{RTMS_API}/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade", "SINGLE_MULTI", True),
+    "single_multi_family_rent": RtmsApi(f"{RTMS_API}/RTMSDataSvcSHRent/getRTMSDataSvcSHRent", "SINGLE_MULTI", False),
 }
-API_IDS = tuple(RTMS_API_URLS)
+API_IDS = tuple(RTMS_APIS)
 
 # 신고 기한 30일과 뒤늦은 해제·정정 때문에 지난 달 데이터도 계속 바뀐다.
 RTMS_MONTHS = 2
@@ -54,6 +75,8 @@ FAILED_UNITS_IN_MESSAGE = 20
 
 
 # docker-compose.yml이 AIRFLOW_CONN_* 환경변수로 만드는 Connection. 메타 DB에는 저장하지 않는다.
+# [Airflow] Connection은 외부 시스템 접속 정보(호스트·계정·비밀번호·extra)를 conn_id 하나로 묶은 것이다.
+# 환경변수 AIRFLOW_CONN_{conn_id 대문자}가 있으면 그것이 먼저 쓰이고, 없으면 메타 DB(UI에서 등록한 것)를 찾는다.
 PROP_TREND_DB_CONN_ID = "prop_trend_db"
 # 인증키를 password에 둬야 Airflow가 태스크 로그에서 가린다.
 DATA_GO_KR_CONN_ID = "data_go_kr"
@@ -87,11 +110,314 @@ LEGAL_DONG_CODE_KNOWN_FIELDS = frozenset(
 # api/src/jobs/lock.py의 LOCK_NAMESPACE·scope_key()와 같은 키다. jobs CLI와 백필이 남아 있는 동안
 # 같은 범위를 동시에 갈아끼우면 두 트랜잭션이 서로의 INSERT를 못 보고 지워 행이 두 벌 남는다.
 LOCK_NAMESPACE = 0x70726F70
+# 법정동코드 bronze와 지역 목록 범위. 실거래 범위는 api_id를 그대로 쓴다.
+LEGAL_DONG_SCOPE = "legal_dong"
+
+# 아래 컬럼은 api/src/model의 정제 테이블과 같아야 한다. id·created_at은 DB 기본값에 맡긴다.
+TRANSACTION_COMMON_COLUMNS = (
+    "property_type",
+    "house_type",
+    "sido_code",
+    "sigungu_code",
+    "umd_name",
+    "jibun",
+    "building_name",
+    "deal_date",
+    "exclusive_use_area",
+    "floor",
+    "build_year",
+    "total_floor_area",
+    "apartment_serial_number",
+    "sigungu_name",
+)
+SALE_COLUMNS = (
+    *TRANSACTION_COMMON_COLUMNS,
+    "plottage_area",
+    "land_area",
+    "deal_amount",
+    "dealing_type",
+    "estate_agent_sigungu_name",
+    "seller_type",
+    "buyer_type",
+    "cancel_deal_type",
+    "cancel_deal_date",
+    "registration_date",
+    "apartment_dong",
+    "land_leasehold_type",
+)
+RENT_COLUMNS = (
+    *TRANSACTION_COMMON_COLUMNS,
+    "deposit",
+    "monthly_rent",
+    "contract_term",
+    "contract_type",
+    "renewal_right_used",
+    "previous_deposit",
+    "previous_monthly_rent",
+    "road_address_detail",
+)
+# 아파트 전월세 전용 도로명 7개 필드. 나머지 유형에서는 전부 NULL이라 컬럼 대신 JSONB 하나로 묶는다.
+ROAD_ADDRESS_FIELDS = ("roadnm", "roadnmsggcd", "roadnmcd", "roadnmseq", "roadnmbcd", "roadnmbonbun", "roadnmbubun")
 
 
-def lock_key(scope: str) -> int:
-    """범위 이름을 jobs와 같은 int4 advisory lock 키로 바꾼다."""
-    return zlib.crc32(scope.encode()) & 0x7FFFFFFF
+def _transaction_sql(table: str, columns: tuple[str, ...]) -> tuple[str, str]:
+    """정제 테이블 하나의 단위 삭제문과 적재문을 만든다."""
+    # 테이블·컬럼 이름은 이 모듈의 상수에서만 온다. 값은 전부 바인드 파라미터다.
+    placeholders = ", ".join("%s::jsonb" if column == "road_address_detail" else "%s" for column in columns)
+    delete_sql = (
+        f"DELETE FROM {table} WHERE property_type = %s AND sido_code = %s AND sigungu_code = %s "  # noqa: S608
+        "AND deal_date >= %s AND deal_date < %s"
+    )
+    insert_sql = f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders})"  # noqa: S608
+    return delete_sql, insert_sql
+
+
+SALE_DELETE_SQL, SALE_INSERT_SQL = _transaction_sql("sale_transactions", SALE_COLUMNS)
+RENT_DELETE_SQL, RENT_INSERT_SQL = _transaction_sql("rent_transactions", RENT_COLUMNS)
+
+# api/src/model/complex.py의 COMPLEX_KEY_COLUMNS와 같아야 한다. 단지를 만드는 유형은 이 둘뿐이다.
+# 아파트는 단지명이 과거 거래까지 소급해 바뀌므로 이름이 아니라 단지 일련번호로 식별한다.
+COMPLEX_KEY_COLUMNS = {
+    "APT": ("apartment_serial_number",),
+    "OFFICETEL": ("sido_code", "sigungu_code", "umd_name", "jibun", "building_name", "build_year"),
+}
+COMPLEX_COLUMNS = (
+    "sido_code",
+    "sigungu_code",
+    "umd_name",
+    "jibun",
+    "building_name",
+    "build_year",
+    "apartment_serial_number",
+)
+COMPLEX_UPSERT_SQL = {
+    # 키가 아닌 속성은 최근 거래 값으로 맞추되, 매일 같은 값으로 덮어 updated_at과 행 버전만 쌓이지 않도록
+    # 달라졌을 때만 고친다. ON CONFLICT가 부분 유니크 인덱스를 추론하려면 인덱스와 같은 WHERE를 넘겨야 한다.
+    "APT": """
+        INSERT INTO complexes (property_type, sido_code, sigungu_code, umd_name, jibun, building_name, build_year,
+                               apartment_serial_number)
+        VALUES ('APT', %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (apartment_serial_number) WHERE property_type = 'APT'
+        DO UPDATE SET sido_code = EXCLUDED.sido_code, sigungu_code = EXCLUDED.sigungu_code,
+                      umd_name = EXCLUDED.umd_name, jibun = EXCLUDED.jibun,
+                      building_name = EXCLUDED.building_name, build_year = EXCLUDED.build_year,
+                      updated_at = now()
+        WHERE (complexes.sido_code, complexes.sigungu_code, complexes.umd_name, complexes.jibun,
+               complexes.building_name, complexes.build_year)
+              IS DISTINCT FROM
+              (EXCLUDED.sido_code, EXCLUDED.sigungu_code, EXCLUDED.umd_name, EXCLUDED.jibun,
+               EXCLUDED.building_name, EXCLUDED.build_year)
+    """,
+    # 오피스텔은 키 컬럼이 곧 속성 전부라 고칠 값이 없다.
+    "OFFICETEL": """
+        INSERT INTO complexes (property_type, sido_code, sigungu_code, umd_name, jibun, building_name, build_year,
+                               apartment_serial_number)
+        VALUES ('OFFICETEL', %s, %s, %s, %s, %s, %s, %s)
+        ON CONFLICT (sido_code, sigungu_code, umd_name, jibun, building_name, build_year)
+            WHERE property_type = 'OFFICETEL'
+        DO NOTHING
+    """,
+}
+
+
+def try_lock(conn: Any, scope: str) -> None:
+    """범위 락을 잡는다. 다른 실행이 쥐고 있으면 태스크를 건너뛴다."""
+    # 세션 락이라 커밋을 거듭해도 태스크가 끝날 때까지 유지되고, 커넥션이 닫히면 풀린다.
+    # 기다리지 않는 것은 jobs CLI와 백필이 범위를 회차 내내 쥐고 있어서다. 그쪽이 같은 범위를
+    # 막 갈아끼우는 중이고 API 한도도 그쪽이 쓰고 있다.
+    with closing(conn.cursor()) as cursor:
+        cursor.execute(
+            "SELECT pg_try_advisory_lock(%s, %s)",
+            (LOCK_NAMESPACE, zlib.crc32(scope.encode()) & 0x7FFFFFFF),
+        )
+        acquired = cursor.fetchone()
+    conn.commit()
+    if not (acquired and acquired[0]):
+        raise AirflowSkipException(f"다른 실행이 {scope}를 갱신하고 있다")
+
+
+def rtms_units(hook: PostgresHook, context: dict[str, Any]) -> list[tuple[str, str]]:
+    """이번 회차의 갱신 단위(시군구, 계약년월)를 최신 월부터 만든다."""
+    # "이번 달"은 실행 시각이 아니라 회차 기준 시각(KST)으로 센다. 재시도해도, bronze와 silver가 따로 돌아도
+    # 같은 달을 가리킨다.
+    # [Airflow] context["dag_run"]은 지금 도는 DAG 실행(DagRun)이다. run_after는 그 실행이 돌기로 예정된 시각으로,
+    # 스케줄 실행이면 cron 시각(매일 04:00), 수동 실행이면 트리거한 시각이다. 재시도해도 바뀌지 않는다.
+    run_after = pendulum.instance(context["dag_run"].run_after).in_timezone("Asia/Seoul")
+    months = [run_after.subtract(months=offset).format("YYYYMM") for offset in range(RTMS_MONTHS)]
+    # region_cd 앞 5자리가 실거래 API의 LAWD_CD다. 법정동코드 태스크가 시군구 행만 넣어 둔다.
+    sigungu = [
+        row[0]
+        # [Airflow] DbApiHook의 편의 메서드. 커넥션을 열어 쿼리를 실행하고 fetchall() 결과를 돌려준 뒤 닫는다.
+        for row in hook.get_records(
+            "SELECT DISTINCT left(payload ->> 'region_cd', 5) FROM legal_dong_code_raw_items "
+            "WHERE payload ->> 'region_cd' IS NOT NULL ORDER BY 1"
+        )
+    ]
+    if not sigungu:
+        # 0단위로 끝나면 성공으로 보인다. 법정동코드가 한 번도 적재되지 않은 DB다.
+        raise RuntimeError("시군구 목록이 비어 있다. 법정동코드를 먼저 적재해야 한다")
+    # 최신 월부터 돈다. 중간에 한도로 끊겨도 최근 데이터가 먼저 반영된다.
+    return [(lawd_cd, deal_ymd) for deal_ymd in months for lawd_cd in sigungu]
+
+
+def _text(value: str | None) -> str | None:
+    """원본이 쓰는 빈 값 세 가지(None, "", 공백 한 칸)를 모두 None으로 맞춘다."""
+    if value is None:
+        return None
+    return value.strip() or None
+
+
+def _required(row: dict[str, Any], field: str) -> str:
+    """비어 있으면 안 되는 필드를 읽는다. payload에 키 자체가 없어도 빈 값과 같게 다룬다."""
+    value = _text(row.get(field))
+    if value is None:
+        raise ValueError(f"{field}가 비어 있다")
+    return value
+
+
+def _sgg_cd(value: str) -> tuple[str, str]:
+    """5자리 시군구코드를 시도 2자리 + 시군구 3자리로 나눈다."""
+    # isdigit()만으로는 부족하다. 아라비아-인도 숫자 같은 비ASCII 숫자도 True다.
+    if len(value) != 5 or not (value.isascii() and value.isdigit()):  # noqa: PLR2004
+        raise ValueError(f"sgg_cd는 숫자 5자리여야 한다: {value!r}")
+    return value[:2], value[2:]
+
+
+def _int(value: str | None) -> int | None:
+    text = _text(value)
+    return None if text is None else int(text)
+
+
+def _decimal(value: str | None) -> Decimal | None:
+    text = _text(value)
+    return None if text is None else Decimal(text)
+
+
+def _amount(value: str | None) -> int | None:
+    """만원 단위 콤마 문자열("36,900")을 원 단위 정수로 바꾼다."""
+    text = _text(value)
+    return None if text is None else int(text.replace(",", "")) * 10_000
+
+
+def _short_date(value: str | None) -> date | None:
+    """cdealDay/rgstDate의 "26.02.27"(YY.MM.DD) 형식을 date로 바꾼다."""
+    text = _text(value)
+    if text is None:
+        return None
+    year, month, day = text.split(".")
+    return date(2000 + int(year), int(month), int(day))
+
+
+def preprocess_rtms(api_id: str, raw_id: int, payload: dict[str, Any]) -> dict[str, Any]:
+    """bronze payload 한 건을 정제 테이블 행으로 바꾼다. 실패하면 어느 bronze 행인지 붙여 던진다."""
+    api = RTMS_APIS[api_id]
+    try:
+        sido_code, sigungu_code = _sgg_cd(_required(payload, "sggCd"))
+        row: dict[str, Any] = {
+            "property_type": api.property_type,
+            "house_type": _text(payload.get("houseType")),
+            "sido_code": sido_code,
+            "sigungu_code": sigungu_code,
+            "umd_name": _text(payload.get("umdNm")),
+            "jibun": _text(payload.get("jibun")),
+            "building_name": _text(payload.get(api.building_name_field)) if api.building_name_field else None,
+            "deal_date": date(
+                int(_required(payload, "dealYear")),
+                int(_required(payload, "dealMonth")),
+                int(_required(payload, "dealDay")),
+            ),
+            "exclusive_use_area": _decimal(payload.get("excluUseAr")),
+            "floor": _int(payload.get("floor")),
+            "build_year": _int(payload.get("buildYear")),
+            "total_floor_area": _decimal(payload.get("totalFloorAr")),
+            "apartment_serial_number": _text(payload.get("aptSeq")),
+            "sigungu_name": _text(payload.get("sggNm")),
+        }
+        if api.is_sale:
+            row |= {
+                "plottage_area": _decimal(payload.get("plottageAr")),
+                "land_area": _decimal(payload.get("landAr")),
+                "deal_amount": _amount(_required(payload, "dealAmount")),
+                "dealing_type": _text(payload.get("dealingGbn")),
+                "estate_agent_sigungu_name": _text(payload.get("estateAgentSggNm")),
+                "seller_type": _text(payload.get("slerGbn")),
+                "buyer_type": _text(payload.get("buyerGbn")),
+                "cancel_deal_type": _text(payload.get("cdealType")),
+                "cancel_deal_date": _short_date(payload.get("cdealDay")),
+                "registration_date": _short_date(payload.get("rgstDate")),
+                "apartment_dong": _text(payload.get("aptDong")),
+                "land_leasehold_type": _text(payload.get("landLeaseholdGbn")),
+            }
+        else:
+            road_address = {
+                field: value for field in ROAD_ADDRESS_FIELDS if (value := _text(payload.get(field))) is not None
+            }
+            row |= {
+                "deposit": _amount(_required(payload, "deposit")),
+                "monthly_rent": _amount(_required(payload, "monthlyRent")),
+                "contract_term": _text(payload.get("contractTerm")),
+                "contract_type": _text(payload.get("contractType")),
+                "renewal_right_used": _text(payload.get("useRRRight")),
+                # 종전 보증금은 음수로 들어오는 행이 있다. 원본 값을 그대로 둔다.
+                "previous_deposit": _amount(payload.get("preDeposit")),
+                "previous_monthly_rent": _amount(payload.get("preMonthlyRent")),
+                "road_address_detail": road_address or None,
+            }
+    except (ValueError, InvalidOperation) as error:
+        raise ValueError(f"{api_id} 가공 실패(rtms_raw_items.id={raw_id}): {error}") from error
+    return row
+
+
+def preprocess_regions(items: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """법정동코드 시군구 행을 regions 행으로 바꾼다. 한 행이라도 비정상이면 예외를 던진다."""
+    names = [_required(item, "locatadd_nm") for item in items]
+    # 일반구를 둔 시("경기도 수원시")는 실거래가 구 코드로만 들어와 고르면 항상 빈 결과다.
+    # 코드 앞자리로는 영동군(43740)·증평군(43745)처럼 별개 지역이 겹쳐 이름으로 판별한다.
+    ancestors = {" ".join(tokens[:i]) for tokens in (name.split() for name in names) for i in range(1, len(tokens))}
+
+    rows: list[dict[str, str]] = []
+    sido_names: dict[str, str] = {}
+    for item, name in zip(items, names, strict=True):
+        if name in ancestors:
+            continue
+        # 실거래 수집의 LAWD_CD와 같은 출처(region_cd 앞 5자리)를 쓴다.
+        sido_code, sigungu_code = _sgg_cd(_required(item, "region_cd")[:5])
+        sido_name, _, sigungu_name = name.partition(" ")
+        # 시도명이 행마다 반복되므로 같은 시도가 다른 이름으로 갈라지면 드롭다운에 시도가 둘로 보인다.
+        if sido_names.setdefault(sido_code, sido_name) != sido_name:
+            raise ValueError(f"시도 {sido_code}의 이름이 하나가 아니다: {sido_names[sido_code]!r}, {sido_name!r}")
+        # 세종은 시군구 단계 없이 "세종특별자치시"만 온다.
+        rows.append(
+            {
+                "sido_code": sido_code,
+                "sigungu_code": sigungu_code,
+                "sido_name": sido_name,
+                "sigungu_name": sigungu_name or sido_name,
+            }
+        )
+    return rows
+
+
+def upsert_complexes(cursor: Any, property_type: str, rows: list[dict[str, Any]]) -> int:
+    """정제 행에서 단지별로 가장 최근 거래의 속성을 골라 complexes에 upsert한다."""
+    key_columns = COMPLEX_KEY_COLUMNS[property_type]
+    latest: dict[tuple[Any, ...], dict[str, Any]] = {}
+    for row in rows:
+        # 상세 자료로 재수집되기 전의 아파트 매매는 단지 일련번호가 없어 단지를 특정할 수 없다.
+        if property_type == "APT" and row["apartment_serial_number"] is None:
+            continue
+        key = tuple(row[column] for column in key_columns)
+        if key not in latest or row["deal_date"] > latest[key]["deal_date"]:
+            latest[key] = row
+    # 같은 단지를 upsert하는 태스크(아파트 매매·전월세)가 동시에 돌 때 행 락을 서로 다른 순서로 잡아
+    # 데드락이 나지 않게 키 순으로 넣는다. NULL과 값을 직접 비교하면 TypeError가 나므로 NULL 여부를 먼저 비교한다.
+    ordered = sorted(latest.items(), key=lambda item: tuple((value is not None, value) for value in item[0]))
+    if ordered:
+        cursor.executemany(
+            COMPLEX_UPSERT_SQL[property_type],
+            [tuple(row[column] for column in COMPLEX_COLUMNS) for _, row in ordered],
+        )
+    return len(ordered)
 
 
 def raise_for_open_api_status(response: httpx.Response, api_name: str) -> None:
@@ -113,7 +439,6 @@ def raise_for_open_api_status(response: httpx.Response, api_name: str) -> None:
 
 def get_service_key() -> str:
     """공공데이터포털 인증키를 Connection에서 읽는다."""
-    # 파싱 시점이 아니라 실행 시점에 읽는다. DAG 파일은 수시로 다시 파싱된다.
     service_key = BaseHook.get_connection(DATA_GO_KR_CONN_ID).password
     if not service_key:
         raise RuntimeError(f"{DATA_GO_KR_CONN_ID} Connection에 인증키(password)가 없다")
@@ -180,7 +505,7 @@ def fetch_rtms_items(
             "pageNo": page_no,
             "numOfRows": RTMS_ROWS_PER_PAGE,
         }
-        response = client.get(RTMS_API_URLS[api_id], params=params)
+        response = client.get(RTMS_APIS[api_id].url, params=params)
         raise_for_open_api_status(response, f"{api_id} API")
 
         root = safe_xml_fromstring(response.text)
@@ -219,67 +544,39 @@ def refresh_legal_dong() -> dict[str, int]:
         log.warning("법정동코드: 기준선에 있던 필드가 응답에 없다 %s", sorted(missing))
 
     hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
-    # 비우기와 채우기는 한 트랜잭션이어야 한다. 커밋 전에 예외가 나면 닫히면서 롤백돼 어제 목록이 남는다.
-    with closing(hook.get_conn()) as conn, closing(conn.cursor()) as cursor:
-        # 트랜잭션 락이라 커밋·롤백과 함께 풀린다. 기다리지 않는 것은 jobs CLI의 전체 갱신이 이 범위를
-        # 회차 내내 쥐고 있어서다. 그쪽이 같은 표를 막 갈아끼우는 중이므로 건너뛰어도 잃는 것이 없다.
-        cursor.execute("SELECT pg_try_advisory_xact_lock(%s, %s)", (LOCK_NAMESPACE, lock_key("legal_dong")))
-        acquired = cursor.fetchone()
-        if not (acquired and acquired[0]):
-            raise AirflowSkipException("다른 실행이 법정동코드를 갱신하고 있다")
-        cursor.execute("DELETE FROM legal_dong_code_raw_items")
-        deleted = cursor.rowcount
-        # collected_at은 server_default에 맡긴다.
-        cursor.executemany(
-            "INSERT INTO legal_dong_code_raw_items (payload) VALUES (%s::jsonb)",
-            [(json.dumps(item, ensure_ascii=False),) for item in items],
-        )
+
+    with closing(hook.get_conn()) as conn:
+        try_lock(conn, LEGAL_DONG_SCOPE)
+        # 비우기와 채우기는 한 트랜잭션이어야 한다. 커밋 전에 예외가 나면 닫히면서 롤백돼 어제 목록이 남는다.
+        with closing(conn.cursor()) as cursor:
+            cursor.execute("DELETE FROM legal_dong_code_raw_items")
+            deleted = cursor.rowcount
+            cursor.executemany(
+                "INSERT INTO legal_dong_code_raw_items (payload) VALUES (%s::jsonb)",
+                [(json.dumps(item, ensure_ascii=False),) for item in items],
+            )
         conn.commit()
 
     log.info("법정동코드 bronze %d건 교체(삭제 %d건)", len(items), deleted)
+
     return {"deleted": deleted, "loaded": len(items)}
 
 
 # 법정동코드 교체는 한 트랜잭션이라 실패해도 어제 목록이 남는다. 실거래 갱신을 막을 이유가 없다.
 @task(trigger_rule=TriggerRule.ALL_DONE, execution_timeout=timedelta(hours=1))
+# api_id처럼 DAG에서 넘긴 일반 인자는 앞쪽 위치 인자로 그대로 들어온다.
 def collect_rtms(api_id: str, **context: Any) -> dict[str, int]:
     """API 하나의 최근 계약년월 × 전 시군구를 받아 단위마다 bronze를 갈아끼운다."""
     service_key = get_service_key()
-
-    # "이번 달"은 실행 시각이 아니라 회차 기준 시각(KST)으로 센다. 재시도해도 같은 달을 다시 받는다.
-    run_after = pendulum.instance(context["dag_run"].run_after).in_timezone("Asia/Seoul")
-    # 최신 월부터 돈다. 중간에 한도로 끊겨도 최근 데이터가 먼저 반영된다.
-    months = [run_after.subtract(months=offset).format("YYYYMM") for offset in range(RTMS_MONTHS)]
-
     hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
-    # region_cd 앞 5자리가 실거래 API의 LAWD_CD다. 법정동코드 태스크가 시군구 행만 넣어 둔다.
-    sigungu = [
-        row[0]
-        for row in hook.get_records(
-            "SELECT DISTINCT left(payload ->> 'region_cd', 5) FROM legal_dong_code_raw_items "
-            "WHERE payload ->> 'region_cd' IS NOT NULL ORDER BY 1"
-        )
-    ]
-    if not sigungu:
-        # 0단위로 끝나면 성공으로 보인다. 법정동코드가 한 번도 적재되지 않은 DB다.
-        raise RuntimeError("시군구 목록이 비어 있다. 법정동코드를 먼저 적재해야 한다")
-
-    units = [(lawd_cd, deal_ymd) for deal_ymd in months for lawd_cd in sigungu]
-    log.info("%s: 시군구 %d × %d개월 = %d단위", api_id, len(sigungu), len(months), len(units))
+    units = rtms_units(hook, context)
+    log.info("%s: bronze %d단위", api_id, len(units))
 
     failed: list[str] = []
     loaded = 0
     # 반환 타입(CompatConnection)이 psycopg2·3 공통 메서드 중 rollback을 빠뜨리고 있다.
     with closing(cast("Any", hook.get_conn())) as conn, httpx.Client(timeout=OPEN_API_TIMEOUT) as client:
-        # 세션 락이라 커밋을 거듭해도 태스크가 끝날 때까지 유지되고, 커넥션이 닫히면 풀린다.
-        # 백필이 같은 API를 쥐고 있으면 한도도 그쪽이 쓰고 있다. 기다리지 않고 건너뛴다.
-        with closing(conn.cursor()) as cursor:
-            cursor.execute("SELECT pg_try_advisory_lock(%s, %s)", (LOCK_NAMESPACE, lock_key(api_id)))
-            acquired = cursor.fetchone()
-        conn.commit()
-        if not (acquired and acquired[0]):
-            raise AirflowSkipException(f"다른 실행이 {api_id}를 갱신하고 있다")
-
+        try_lock(conn, api_id)
         for done, (lawd_cd, deal_ymd) in enumerate(units):
             coordinate = f"{api_id}:{lawd_cd}:{deal_ymd}"
             time.sleep(RTMS_UNIT_INTERVAL)
@@ -304,6 +601,7 @@ def collect_rtms(api_id: str, **context: Any) -> dict[str, int]:
                 # 남은 단위도 전부 같은 응답을 받는다. 받은 단위는 커밋됐으니 남은 것은 내일 회차에 맡긴다.
                 conn.rollback()
                 log.warning("%s: 일일 호출 제한으로 %d단위를 남기고 멈춘다", api_id, len(units) - done)
+                # 태스크가 skipped로 끝난다.
                 raise
             except Exception:
                 # 단위 하나는 트랜잭션째 되돌아가므로 나머지를 멈추지 않는다. 실패는 끝에서 태스크 상태로 올린다.
@@ -322,34 +620,141 @@ def collect_rtms(api_id: str, **context: Any) -> dict[str, int]:
     return summary
 
 
+# bronze 수집이 실패·건너뜀이어도 돈다. 정제 테이블은 bronze만의 함수라, 이번에 못 받은 단위는 어제 응답으로
+# 다시 만들어 같은 결과가 나오고 받은 단위만 새로 반영된다.
+@task(trigger_rule=TriggerRule.ALL_DONE, execution_timeout=timedelta(minutes=30))
+def process_rtms(api_id: str, **context: Any) -> dict[str, int]:
+    """bronze에 남은 응답으로 API 하나의 최근 계약년월 × 전 시군구 정제 테이블을 갈아끼운다."""
+    api = RTMS_APIS[api_id]
+    delete_sql, insert_sql = (SALE_DELETE_SQL, SALE_INSERT_SQL) if api.is_sale else (RENT_DELETE_SQL, RENT_INSERT_SQL)
+    columns = SALE_COLUMNS if api.is_sale else RENT_COLUMNS
+    hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
+    units = rtms_units(hook, context)
+    log.info("%s: silver %d단위", api_id, len(units))
+
+    failed: list[str] = []
+    loaded = complexes = 0
+    with closing(cast("Any", hook.get_conn())) as conn:
+        try_lock(conn, api_id)
+        for lawd_cd, deal_ymd in units:
+            coordinate = f"{api_id}:{lawd_cd}:{deal_ymd}"
+            year, month = int(deal_ymd[:4]), int(deal_ymd[4:])
+            month_start = date(year, month, 1)
+            month_end = date(year + month // 12, month % 12 + 1, 1)
+            try:
+                # 실거래와 단지가 한 트랜잭션이라 정제가 롤백되면 이번 단위로 생긴 단지도 함께 되돌아간다.
+                with closing(conn.cursor()) as cursor:
+                    cursor.execute(
+                        "SELECT id, payload FROM rtms_raw_items WHERE api_id = %s AND deal_ymd = %s AND lawd_cd = %s",
+                        (api_id, deal_ymd, lawd_cd),
+                    )
+                    rows = [preprocess_rtms(api_id, raw_id, payload) for raw_id, payload in cursor.fetchall()]
+                    cursor.execute(delete_sql, (api.property_type, lawd_cd[:2], lawd_cd[2:], month_start, month_end))
+                    cursor.executemany(
+                        insert_sql,
+                        [
+                            tuple(
+                                json.dumps(value, ensure_ascii=False) if isinstance(value, dict) else value
+                                for value in (row[column] for column in columns)
+                            )
+                            for row in rows
+                        ],
+                    )
+                    unit_complexes = (
+                        upsert_complexes(cursor, api.property_type, rows)
+                        if api.property_type in COMPLEX_KEY_COLUMNS
+                        else 0
+                    )
+                conn.commit()
+            except Exception:
+                # 같은 자리에서 또 터진다면 일시 오류가 아니라 전처리 로직 쪽이다. bronze는 그대로라 코드를 고친 뒤
+                # 이 태스크만 다시 돌리면 된다. 나머지 단위는 멈추지 않는다.
+                conn.rollback()
+                failed.append(coordinate)
+                log.exception("silver 갱신 실패: %s", coordinate)
+            else:
+                loaded += len(rows)
+                complexes += unit_complexes
+
+    summary = {
+        "units": len(units),
+        "succeeded": len(units) - len(failed),
+        "failed": len(failed),
+        "loaded": loaded,
+        "complexes": complexes,
+    }
+    log.info("%s: silver 갱신 종료 %s", api_id, summary)
+    if failed:
+        raise RuntimeError(f"{api_id}: {len(failed)}/{len(units)}단위 실패 {failed[:FAILED_UNITS_IN_MESSAGE]}")
+    return summary
+
+
+# 법정동코드 수집이 실패·건너뜀이어도 남아 있는 bronze로 다시 만든다. 지난번 지역 가공이 실패했다면 여기서 복구된다.
+@task(trigger_rule=TriggerRule.ALL_DONE, execution_timeout=timedelta(minutes=10))
+def process_regions() -> dict[str, int]:
+    """법정동코드 bronze로 지역 목록(regions)을 통째로 갈아끼운다."""
+    hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
+    with closing(hook.get_conn()) as conn:
+        try_lock(conn, LEGAL_DONG_SCOPE)
+        with closing(conn.cursor()) as cursor:
+            cursor.execute("SELECT payload FROM legal_dong_code_raw_items")
+            rows = preprocess_regions([payload for (payload,) in cursor.fetchall()])
+            # 전처리에서 전부 걸러진 채 확정되면 지역 필터가 통째로 사라진다.
+            if not rows:
+                raise RuntimeError("적재할 지역 행이 없다")
+            # 비우기와 채우기는 한 트랜잭션이어야 한다. 사이에서 끊기면 지역 필터가 사라진다.
+            cursor.execute("DELETE FROM regions")
+            deleted = cursor.rowcount
+            cursor.executemany(
+                "INSERT INTO regions (sido_code, sigungu_code, sido_name, sigungu_name) "
+                "VALUES (%(sido_code)s, %(sigungu_code)s, %(sido_name)s, %(sigungu_name)s)",
+                rows,
+            )
+        conn.commit()
+
+    log.info("지역 %d건 교체(삭제 %d건)", len(rows), deleted)
+    return {"deleted": deleted, "loaded": len(rows)}
+
+
 @dag(
     schedule="0 4 * * *",
     start_date=pendulum.datetime(2026, 10, 1, tz="Asia/Seoul"),
-    # 밀린 회차를 따라잡으면 같은 최근 두 달을 회차 수만큼 다시 받아 한도만 쓴다.
     catchup=False,
     max_active_runs=1,
-    # 외부 호출 동시성을 분할 전(프로세스 1개, --concurrency 4)과 같게 둔다. 실측 뒤 올린다.
     max_active_tasks=4,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=10)},
     tags=["rtms"],
 )
 def rtms_daily() -> None:
-    """법정동코드를 교체하고 API 8종의 bronze를 따로 갱신한다."""
-
+    """법정동코드와 지역 목록을 교체하고, API 8종을 따로 bronze에 받아 정제 테이블로 옮긴다."""
     legal_dong = refresh_legal_dong()
+    regions = process_regions()
 
-    collects = [
+    legal_dong >> regions
+
+    collects = []
+    processes = []
+    for api_id in API_IDS:
         # 백필 DAG와 같은 pool을 써서 같은 API를 동시에 쓰지 않고 줄을 선다. 한도가 API마다 걸리기 때문이다.
-        collect_rtms.override(task_id=f"collect_{api_id}", pool=f"rtms_{api_id}")(api_id)
-        for api_id in API_IDS
-    ]
+        collect = collect_rtms.override(task_id=f"collect_{api_id}", pool=f"rtms_{api_id}")(api_id)
+        # 정제는 오픈API를 부르지 않으므로 pool을 쓰지 않는다. 같은 API의 bronze가 다 받아진 뒤에 돈다.
+        process = process_rtms.override(task_id=f"process_{api_id}")(api_id)
+        legal_dong >> collect >> process
+        collects.append(collect)
+        processes.append(process)
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
-    def summarize(**context: Any) -> dict[str, dict[str, int] | None]:
-        """API별 요약을 모아 한 번에 남긴다."""
+    def summarize(**context: Any) -> dict[str, dict[str, dict[str, int] | None]]:
+        """API별 bronze·silver 요약을 모아 한 번에 남긴다."""
         ti = context["ti"]
         # 실패·건너뜀이면 XCom이 없다. 사유는 그리드의 태스크 상태가 말한다.
-        return {api_id: ti.xcom_pull(task_ids=f"collect_{api_id}") for api_id in API_IDS}
+        return {
+            api_id: {
+                "bronze": ti.xcom_pull(task_ids=f"collect_{api_id}"),
+                "silver": ti.xcom_pull(task_ids=f"process_{api_id}"),
+            }
+            for api_id in API_IDS
+        }
 
     @task(trigger_rule=TriggerRule.ONE_FAILED, retries=0)
     def watcher() -> None:
@@ -357,9 +762,9 @@ def rtms_daily() -> None:
         # DAG 실행 상태는 리프 태스크로 정해진다. summarize가 all_done으로 성공하면 상류 실패가 묻힌다.
         raise RuntimeError("갱신 태스크 중 실패한 것이 있다")
 
-    legal_dong >> collects
-    collects >> summarize()
-    [legal_dong, *collects] >> watcher()
+    # [Airflow] 리스트를 >>의 한쪽에 두면 리스트의 모든 태스크와 한꺼번에 의존 관계를 맺는다.
+    processes >> summarize()
+    [legal_dong, regions, *collects, *processes] >> watcher()
 
 
 rtms_daily()

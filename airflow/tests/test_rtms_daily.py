@@ -1,7 +1,8 @@
 """정기 갱신 DAG의 구조와 태스크가 부르는 수집 함수. 태스크 상태 규칙이 어긋나면 실패가 조용히 묻힌다."""
 
 import json
-from datetime import timedelta
+from datetime import date, timedelta
+from decimal import Decimal
 from pathlib import Path
 
 import httpx
@@ -10,7 +11,17 @@ from airflow.dag_processing.dagbag import DagBag
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
 from airflow.sdk.exceptions import AirflowSkipException
-from rtms_daily import LEGAL_DONG_ROWS_PER_PAGE, RTMS_ROWS_PER_PAGE, fetch_legal_dong_rows, fetch_rtms_items
+from rtms_daily import (
+    LEGAL_DONG_ROWS_PER_PAGE,
+    RENT_COLUMNS,
+    RTMS_ROWS_PER_PAGE,
+    SALE_COLUMNS,
+    fetch_legal_dong_rows,
+    fetch_rtms_items,
+    preprocess_regions,
+    preprocess_rtms,
+    upsert_complexes,
+)
 
 AIRFLOW_DIR = Path(__file__).resolve().parents[1]
 DAGS_DIR = AIRFLOW_DIR / "dags"
@@ -27,6 +38,7 @@ API_IDS = [
     "single_multi_family_rent",
 ]
 COLLECT_TASK_IDS = [f"collect_{api_id}" for api_id in API_IDS]
+PROCESS_TASK_IDS = [f"process_{api_id}" for api_id in API_IDS]
 
 
 def load_dagbag() -> DagBag:
@@ -85,10 +97,31 @@ def test_legal_dong_runs_with_timeout(dag: DAG) -> None:
     assert python_task(dag, "refresh_legal_dong").execution_timeout == timedelta(minutes=10)
 
 
-def test_summarize_waits_for_every_collect_task(dag: DAG) -> None:
+def test_process_tasks_follow_their_own_collect_task(dag: DAG) -> None:
+    for api_id, task_id in zip(API_IDS, PROCESS_TASK_IDS, strict=True):
+        task = python_task(dag, task_id)
+
+        assert tuple(task.op_args) == (api_id,)
+        # 다른 API의 수집을 기다리면 한도로 늦어진 API 하나가 나머지 정제까지 붙잡는다.
+        assert task.upstream_task_ids == {f"collect_{api_id}"}
+        # 수집이 한도로 건너뛰어도 받은 단위는 정제돼야 한다.
+        assert task.trigger_rule == "all_done"
+        # 오픈API를 부르지 않으므로 API pool에 줄 서지 않는다.
+        assert task.pool == "default_pool"
+
+
+def test_regions_follow_legal_dong_even_if_it_fails(dag: DAG) -> None:
+    task = python_task(dag, "process_regions")
+
+    assert task.upstream_task_ids == {"refresh_legal_dong"}
+    # 법정동코드 수집이 실패해도 남은 bronze로 지역 목록을 다시 만든다.
+    assert task.trigger_rule == "all_done"
+
+
+def test_summarize_waits_for_every_process_task(dag: DAG) -> None:
     summarize = dag.get_task("summarize")
 
-    assert summarize.upstream_task_ids == set(COLLECT_TASK_IDS)
+    assert summarize.upstream_task_ids == set(PROCESS_TASK_IDS)
     assert summarize.trigger_rule == "all_done"
 
 
@@ -100,17 +133,22 @@ def test_summarize_keeps_every_api_key(dag: DAG) -> None:
 
     result = python_task(dag, "summarize").python_callable(ti=FakeTaskInstance())
 
-    assert result["apart_sale"] == {"units": 500, "failed": 0}
+    assert result["apart_sale"] == {"bronze": {"units": 500, "failed": 0}, "silver": None}
     # 실패·건너뜀인 API도 키는 남아야 "안 돈 것"이 보인다.
     assert result.keys() == set(API_IDS)
-    assert result["apart_rent"] is None
+    assert result["apart_rent"] == {"bronze": None, "silver": None}
 
 
 def test_watcher_fails_the_run_when_any_task_fails(dag: DAG) -> None:
     watcher = dag.get_task("watcher")
 
     # summarize가 all_done으로 성공하면 상류 실패가 DAG 실행 상태에서 사라진다. watcher가 그것을 드러낸다.
-    assert watcher.upstream_task_ids == {"refresh_legal_dong", *COLLECT_TASK_IDS}
+    assert watcher.upstream_task_ids == {
+        "refresh_legal_dong",
+        "process_regions",
+        *COLLECT_TASK_IDS,
+        *PROCESS_TASK_IDS,
+    }
     assert watcher.trigger_rule == "one_failed"
     assert watcher.retries == 0
 
@@ -265,3 +303,139 @@ def test_legal_dong_http_error_hides_service_key() -> None:
 
     # 예외 메시지는 태스크 로그에 그대로 찍힌다.
     assert "secret-service-key" not in str(error.value)
+
+
+SALE_PAYLOAD = {
+    "sggCd": "11110",
+    "dealYear": "2026",
+    "dealMonth": "2",
+    "dealDay": "27",
+    "umdNm": "청운동",
+    "jibun": "1-1",
+    "aptNm": " 청운현대 ",
+    "excluUseAr": "84.95",
+    "dealAmount": "36,900",
+    "floor": "3",
+    "buildYear": "2000",
+    "cdealType": " ",
+    "cdealDay": "26.03.02",
+    "rgstDate": "",
+    "aptSeq": "11110-1",
+}
+RENT_PAYLOAD = {
+    "sggCd": "11110",
+    "dealYear": "2026",
+    "dealMonth": "10",
+    "dealDay": "1",
+    "deposit": "1,000",
+    "monthlyRent": "50",
+    "preDeposit": "-500",
+    "preMonthlyRent": "",
+    "roadnm": "자하문로",
+    "roadnmbonbun": "00010",
+    "roadnmbubun": " ",
+}
+
+
+def test_sale_payload_is_normalized() -> None:
+    row = preprocess_rtms("apart_sale", 1, SALE_PAYLOAD)
+
+    # 적재문이 컬럼 상수 순서대로 값을 꺼내므로 키가 하나라도 어긋나면 안 된다.
+    assert row.keys() == set(SALE_COLUMNS)
+    assert row["property_type"] == "APT"
+    assert (row["sido_code"], row["sigungu_code"]) == ("11", "110")
+    assert row["deal_date"] == date(2026, 2, 27)
+    assert row["deal_amount"] == 369_000_000
+    assert row["exclusive_use_area"] == Decimal("84.95")
+    assert row["building_name"] == "청운현대"
+    # 원본의 빈 값 세 가지(없음, "", 공백)는 모두 NULL이다.
+    assert row["cancel_deal_type"] is None
+    assert row["registration_date"] is None
+    assert row["house_type"] is None
+    assert row["cancel_deal_date"] == date(2026, 3, 2)
+
+
+def test_building_name_is_none_without_field() -> None:
+    # 단독·다가구는 건물명 필드가 없다. 다른 유형의 필드가 섞여 와도 읽지 않는다.
+    assert preprocess_rtms("single_multi_family_sale", 1, SALE_PAYLOAD)["building_name"] is None
+
+
+def test_rent_payload_is_normalized() -> None:
+    row = preprocess_rtms("apart_rent", 1, RENT_PAYLOAD)
+
+    assert row.keys() == set(RENT_COLUMNS)
+    assert (row["deposit"], row["monthly_rent"]) == (10_000_000, 500_000)
+    # 종전 보증금은 음수로 들어오는 행이 있다. 원본 값을 그대로 둔다.
+    assert row["previous_deposit"] == -5_000_000
+    assert row["previous_monthly_rent"] is None
+    # 도로명 필드는 값이 있는 것만 dict 하나로 묶는다.
+    assert row["road_address_detail"] == {"roadnm": "자하문로", "roadnmbonbun": "00010"}
+
+
+def test_rent_road_address_is_none_when_all_blank() -> None:
+    payload = {key: value for key, value in RENT_PAYLOAD.items() if not key.startswith("roadnm")}
+
+    assert preprocess_rtms("officetel_rent", 1, payload)["road_address_detail"] is None
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {key: value for key, value in SALE_PAYLOAD.items() if key != "dealAmount"},
+        SALE_PAYLOAD | {"dealAmount": "삼만"},
+        SALE_PAYLOAD | {"excluUseAr": "84..9"},
+        SALE_PAYLOAD | {"sggCd": "1111"},
+    ],
+)
+def test_bad_payload_points_at_bronze_row(payload: dict[str, str]) -> None:
+    # 어느 bronze 행인지 알아야 원본을 열어 볼 수 있다.
+    with pytest.raises(ValueError, match=r"apart_sale 가공 실패\(rtms_raw_items.id=7\)"):
+        preprocess_rtms("apart_sale", 7, payload)
+
+
+def test_complexes_take_latest_deal_and_skip_apartments_without_serial() -> None:
+    class FakeCursor:
+        def __init__(self) -> None:
+            self.params: list[tuple[object, ...]] = []
+
+        def executemany(self, sql: str, params: list[tuple[object, ...]]) -> None:
+            self.params = params
+
+    old = preprocess_rtms("apart_sale", 1, SALE_PAYLOAD | {"aptNm": "옛이름", "dealDay": "1"})
+    new = preprocess_rtms("apart_sale", 2, SALE_PAYLOAD | {"aptNm": "새이름", "dealDay": "28"})
+    # 상세 자료로 재수집되기 전의 행이라 단지를 특정할 수 없다.
+    unknown = preprocess_rtms("apart_sale", 3, SALE_PAYLOAD | {"aptSeq": ""})
+    other = preprocess_rtms("apart_sale", 4, SALE_PAYLOAD | {"aptSeq": "11110-0"})
+    cursor = FakeCursor()
+
+    assert upsert_complexes(cursor, "APT", [new, old, unknown, other]) == 2
+    # 데드락을 피하려고 단지 키 순으로 넣는다. 단지명은 가장 최근 거래의 것이다.
+    assert [(params[4], params[6]) for params in cursor.params] == [("청운현대", "11110-0"), ("새이름", "11110-1")]
+
+
+def legal_dong_item(region_cd: str, name: str) -> dict[str, str]:
+    return {"region_cd": region_cd, "locatadd_nm": name}
+
+
+def test_regions_exclude_city_with_general_districts() -> None:
+    rows = preprocess_regions(
+        [
+            legal_dong_item("4111000000", "경기도 수원시"),
+            legal_dong_item("4111100000", "경기도 수원시 장안구"),
+            legal_dong_item("3611000000", "세종특별자치시"),
+        ]
+    )
+
+    # 일반구를 둔 시는 실거래가 구 코드로만 들어와 고르면 항상 빈 결과다.
+    assert rows == [
+        {"sido_code": "41", "sigungu_code": "111", "sido_name": "경기도", "sigungu_name": "수원시 장안구"},
+        # 세종은 시군구 단계가 없어 시도명을 그대로 쓴다.
+        {"sido_code": "36", "sigungu_code": "110", "sido_name": "세종특별자치시", "sigungu_name": "세종특별자치시"},
+    ]
+
+
+def test_regions_reject_sido_with_two_names() -> None:
+    with pytest.raises(ValueError, match="이름이 하나가 아니다"):
+        preprocess_regions(
+            [legal_dong_item("4111100000", "경기도 수원시 장안구"), legal_dong_item("4113100000", "경기 성남시 수정구")]
+        )
