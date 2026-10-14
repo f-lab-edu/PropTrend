@@ -23,7 +23,7 @@ x-airflow-common: &airflow-common
     # 태스크가 읽는 Connection. 환경변수로만 두면 메타 DB와 UI 편집 경로에 비밀값이 남지 않는다.
     AIRFLOW_CONN_PROP_TREND_DB: ${PROP_TREND_DB_CONN:-postgresql://postgres:postgres@postgres:5432/prop_trend}
     # 인증키를 password에 둬야 태스크 로그에서 가려진다. 키에 /·+·=가 있어 URI가 아닌 JSON 형식을 쓴다.
-    AIRFLOW_CONN_DATA_GO_KR: '{"conn_type": "generic", "password": "${DATA_GO_KR_SERVICE_KEY:?airflow/.env에 DATA_GO_KR_SERVICE_KEY를 넣어야 합니다}"}'
+    AIRFLOW_CONN_DATA_GO_KR: '{"conn_type": "http", "host": "https://apis.data.go.kr", "password": "${DATA_GO_KR_SERVICE_KEY:?airflow/.env에 DATA_GO_KR_SERVICE_KEY를 넣어야 합니다}"}'
   volumes:
     - ./dags:/opt/airflow/dags:ro
     - airflow-logs:/opt/airflow/logs

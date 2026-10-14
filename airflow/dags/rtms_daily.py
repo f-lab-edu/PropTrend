@@ -10,10 +10,12 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple, cast
 from xml.etree.ElementTree import ParseError
 
-import httpx
 import pendulum
+import requests
 
-# [Airflow] provider 패키지(apache-airflow-providers-postgres)의 Hook. Connection 하나를 받아 DB 커넥션을 만들어 준다.
+# [Airflow] provider 패키지의 Hook. Connection 하나를 받아 외부 시스템 클라이언트를 만들어 준다.
+# HttpHook(apache-airflow-providers-http)은 requests 세션을, PostgresHook은 DB 커넥션을 준다.
+from airflow.providers.http.hooks.http import HttpHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 # [Airflow] airflow.sdk는 Airflow 3에서 DAG 작성자가 쓰는 공개 인터페이스다. 내부 모듈 대신 여기서 가져온다.
@@ -27,18 +29,18 @@ from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 # [Airflow] 태스크 실행 중 표준 logging으로 남긴 로그는 Airflow가 가로채 UI의 태스크 로그에 보여 준다.
 log = logging.getLogger(__name__)
 
-# httpx는 INFO에서 요청 URL을 통째로 남기는데, 오픈API 인증키가 쿼리 문자열에 실린다.
-# URL 인코딩된 키는 Airflow의 비밀값 마스킹에도 걸리지 않으므로 로그 자체를 내지 않게 한다.
-logging.getLogger("httpx").setLevel(logging.WARNING)
+# urllib3는 DEBUG에서 요청 줄을 쿼리 문자열째 남기는데, 오픈API 인증키가 거기 실린다. URL 인코딩된 키는
+# Airflow의 비밀값 마스킹에도 걸리지 않으므로 로그 수준을 낮춰도 새지 않게 막아 둔다.
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
-# 실거래가 오픈API 8종은 같은 서비스(1613000) 아래 오퍼레이션 이름만 다르다.
-RTMS_API = "https://apis.data.go.kr/1613000"
+# 실거래가 오픈API 8종은 같은 서비스(1613000) 아래 오퍼레이션 이름만 다르다. 호스트는 Connection이 갖는다.
+RTMS_API = "1613000"
 
 
 class RtmsApi(NamedTuple):
-    """실거래가 API 하나의 호출 주소와 정제 테이블로 옮기는 방식."""
+    """실거래가 API 하나의 호출 경로와 정제 테이블로 옮기는 방식."""
 
-    url: str
+    endpoint: str
     # api/src/model/prop_transaction.py의 PropertyType 값. 정제 테이블의 property_type 컬럼에 그대로 들어간다.
     property_type: str
     is_sale: bool
@@ -70,10 +72,11 @@ RTMS_NO_DATA_RESULT_CODE = "03"
 # [Airflow] Connection은 외부 시스템 접속 정보(호스트·계정·비밀번호·extra)를 conn_id 하나로 묶은 것이다.
 # 환경변수 AIRFLOW_CONN_{conn_id 대문자}가 있으면 그것이 먼저 쓰이고, 없으면 메타 DB(UI에서 등록한 것)를 찾는다.
 PROP_TREND_DB_CONN_ID = "prop_trend_db"
-# 인증키를 password에 둬야 Airflow가 태스크 로그에서 가린다.
+# host는 공공데이터포털 주소, password는 인증키다. 인증키를 password에 둬야 Airflow가 태스크 로그에서 가린다.
+# login을 비워야 HttpHook이 Basic 인증 헤더를 붙이지 않는다.
 DATA_GO_KR_CONN_ID = "data_go_kr"
 
-LEGAL_DONG_API_URL = "https://apis.data.go.kr/1741000/StanReginCd/getStanReginCdList"
+LEGAL_DONG_ENDPOINT = "1741000/StanReginCd/getStanReginCdList"
 LEGAL_DONG_ROWS_PER_PAGE = 1000  # 1회 요청 최대 건수(초과 시 에러코드 336)
 LEGAL_DONG_SUCCESS_PREFIX = "INFO"
 OPEN_API_TIMEOUT = 10
@@ -81,10 +84,16 @@ OPEN_API_TIMEOUT = 10
 DAILY_LIMIT_CODE = "22"
 
 
-def raise_for_open_api_status(response: httpx.Response, api_name: str) -> None:
-    """HTTP 오류 응답을 인증키 없는 예외로 바꾼다. 일일 한도 초과는 건너뜀으로 올린다."""
-    if not response.is_error:
-        return
+def get_open_api(session: requests.Session, url: str, params: dict[str, Any], api_name: str) -> requests.Response:
+    """오픈API를 GET으로 부른다. 실패는 인증키 없는 예외로 바꾸고, 일일 한도 초과는 건너뜀으로 올린다."""
+    try:
+        response = session.get(url, params=params, timeout=OPEN_API_TIMEOUT)
+    except requests.RequestException as error:
+        # 연결 실패·타임아웃의 메시지에는 인증키가 실린 요청 URL이 퍼센트 인코딩된 채 들어간다. 원래 예외를
+        # 체인에 남기면 트레이스백으로 함께 찍히므로 끊는다.
+        raise RuntimeError(f"{api_name} 요청 실패: {type(error).__name__}") from None
+    if response.ok:
+        return response
     # 일일 한도를 넘기면 게이트웨이가 HTTP 429와 자체 오류 본문을 돌려준다. 초당 호출 제한 같은
     # 다른 429와 가르려고 본문의 사유 코드를 본다. 오류 본문은 형식을 보장하지 않는다.
     try:
@@ -106,7 +115,7 @@ def get_service_key() -> str:
     return service_key
 
 
-def fetch_legal_dong_rows(client: httpx.Client, service_key: str) -> list[dict[str, str | None]]:
+def fetch_legal_dong_rows(session: requests.Session, base_url: str, service_key: str) -> list[dict[str, str | None]]:
     """법정동코드 API를 끝 페이지까지 받아 시군구 행만 돌려준다."""
     rows: list[dict[str, str | None]] = []
     page_no = 1
@@ -118,8 +127,7 @@ def fetch_legal_dong_rows(client: httpx.Client, service_key: str) -> list[dict[s
             "numOfRows": LEGAL_DONG_ROWS_PER_PAGE,
             "flag": "Y",
         }
-        response = client.get(LEGAL_DONG_API_URL, params=params)
-        raise_for_open_api_status(response, "법정동코드 API")
+        response = get_open_api(session, f"{base_url}/{LEGAL_DONG_ENDPOINT}", params, "법정동코드 API")
 
         root = safe_xml_fromstring(response.text)
         head = root.find("./head")
@@ -149,13 +157,14 @@ def fetch_legal_dong_rows(client: httpx.Client, service_key: str) -> list[dict[s
 
 
 def fetch_rtms_items(
-    client: httpx.Client,
+    session: requests.Session,
+    base_url: str,
     service_key: str,
     api_id: str,
-    lawd_cd: str,
-    deal_ymd: str,
+    unit: tuple[str, str],
 ) -> list[dict[str, str | None]]:
-    """실거래가 API에서 갱신 단위(시군구 × 계약년월) 하나를 끝 페이지까지 받는다."""
+    """실거래가 API에서 갱신 단위(시군구, 계약년월) 하나를 끝 페이지까지 받는다."""
+    lawd_cd, deal_ymd = unit
     items: list[dict[str, str | None]] = []
     page_no = 1
     while True:
@@ -166,8 +175,7 @@ def fetch_rtms_items(
             "pageNo": page_no,
             "numOfRows": RTMS_ROWS_PER_PAGE,
         }
-        response = client.get(RTMS_APIS[api_id].url, params=params)
-        raise_for_open_api_status(response, f"{api_id} API")
+        response = get_open_api(session, f"{base_url}/{RTMS_APIS[api_id].endpoint}", params, f"{api_id} API")
 
         root = safe_xml_fromstring(response.text)
         result_code = root.findtext("./header/resultCode")
@@ -510,13 +518,17 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
 
     failed: list[str] = []
     loaded = 0
-    with httpx.Client(timeout=OPEN_API_TIMEOUT) as client:
-        for done, (lawd_cd, deal_ymd) in enumerate(units):
+    # [Airflow] HttpHook.get_conn()은 Connection의 host로 base_url을 정하고, TCP keep-alive 어댑터를 단 세션을 준다.
+    # hook.run()은 호출마다 세션을 새로 만들어 단위 수백 개의 연결을 재사용하지 못하므로 세션을 한 번 받아 쓴다.
+    hook = HttpHook(method="GET", http_conn_id=DATA_GO_KR_CONN_ID)
+    with hook.get_conn() as session:
+        for done, unit in enumerate(units):
+            lawd_cd, deal_ymd = unit
             coordinate = f"{api_id}:{lawd_cd}:{deal_ymd}"
             time.sleep(RTMS_UNIT_INTERVAL)
             try:
                 # 응답을 기다리는 동안 트랜잭션을 열어 두지 않도록 DB 작업 전에 다 받는다.
-                items = fetch_rtms_items(client, service_key, api_id, lawd_cd, deal_ymd)
+                items = fetch_rtms_items(session, hook.base_url, service_key, api_id, unit)
                 # 단위마다 커밋한다. 다음 단위가 실패해도 이미 받은 응답은 남는다. 일일 호출 제한과
                 # 30일 신고 기한 때문에 같은 파라미터로 다시 불러도 같은 응답이 온다는 보장이 없다.
                 with closing(conn.cursor()) as cursor:
@@ -656,8 +668,9 @@ def refresh_legal_dong() -> dict[str, int]:
     """법정동코드 bronze 표를 오픈API 응답으로 통째로 갈아끼운다."""
     service_key = get_service_key()
     # 응답을 기다리는 동안 트랜잭션과 락을 쥐지 않도록 DB 작업 전에 다 받는다.
-    with httpx.Client(timeout=OPEN_API_TIMEOUT) as client:
-        items = fetch_legal_dong_rows(client, service_key)
+    hook = HttpHook(method="GET", http_conn_id=DATA_GO_KR_CONN_ID)
+    with hook.get_conn() as session:
+        items = fetch_legal_dong_rows(session, hook.base_url, service_key)
 
     # 적재는 막지 않고 경고만 남긴다. 응답은 값이 비어도 태그는 보내므로, 전체에서 한 번도 안 보이면 개명·삭제다.
     seen = {key for item in items for key in item}

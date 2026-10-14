@@ -6,10 +6,11 @@ requires-python = ">=3.14"
 # Dockerfile의 apache/airflow 이미지에 든 버전과 맞춘다. DAG 테스트가 런타임과 다른 연산자를 보면 안 된다.
 dependencies = [
     "apache-airflow==3.3.2",
+    "apache-airflow-providers-http==6.1.0",
     "apache-airflow-providers-postgres==7.0.2",
     # 아래는 이미지에 없거나 Airflow가 간접으로만 끌어오는 것이다. 이미지에 설치하는 버전(Dockerfile)과 맞춘다.
     "defusedxml==0.7.1",
-    "httpx==0.28.1",
+    "requests==2.34.2",
 ]
 
 [tool.ruff]

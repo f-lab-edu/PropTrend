@@ -2,15 +2,18 @@
 
 from datetime import date, timedelta
 from decimal import Decimal
+from io import BytesIO
 from pathlib import Path
 from typing import Any
+from urllib.parse import parse_qsl, urlsplit
 
-import httpx
 import pytest
+import requests
 from airflow.dag_processing.dagbag import DagBag
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
 from airflow.sdk.exceptions import AirflowSkipException
+from requests.adapters import BaseAdapter
 from rtms_daily import (
     LEGAL_DONG_ROWS_PER_PAGE,
     RENT_COLUMNS,
@@ -139,16 +142,37 @@ def test_watcher_fails_the_run_when_any_task_fails(dag: DAG) -> None:
     assert watcher.retries == 0
 
 
-def mock_client(*responses: httpx.Response) -> tuple[httpx.Client, list[httpx.Request]]:
-    """요청을 순서대로 받아 준비한 응답을 돌려주는 클라이언트."""
-    requests: list[httpx.Request] = []
+BASE_URL = "https://apis.data.go.kr"
+
+
+def mock_session(
+    *responses: tuple[int, str] | requests.RequestException,
+) -> tuple[requests.Session, list[requests.PreparedRequest]]:
+    """요청을 순서대로 받아 준비한 응답(상태 코드, 본문)을 돌려주거나 예외를 던지는 세션."""
+    sent: list[requests.PreparedRequest] = []
     pending = list(responses)
 
-    def handler(request: httpx.Request) -> httpx.Response:
-        requests.append(request)
-        return pending.pop(0)
+    class Adapter(BaseAdapter):
+        def send(self, request: requests.PreparedRequest, *args: Any, **kwargs: Any) -> requests.Response:
+            sent.append(request)
+            outcome = pending.pop(0)
+            if isinstance(outcome, requests.RequestException):
+                raise outcome
+            response = requests.Response()
+            response.status_code, response.raw = outcome[0], BytesIO(outcome[1].encode())
+            response.encoding, response.request, response.url = "utf-8", request, request.url or ""
+            return response
 
-    return httpx.Client(transport=httpx.MockTransport(handler)), requests
+        def close(self) -> None:
+            pass
+
+    session = requests.Session()
+    session.mount("https://", Adapter())
+    return session, sent
+
+
+def query(request: requests.PreparedRequest) -> dict[str, str]:
+    return dict(parse_qsl(urlsplit(request.url or "").query))
 
 
 GATEWAY_DAILY_LIMIT_BODY = (
@@ -167,59 +191,72 @@ def rtms_page(total_count: int, *deal_amounts: str, result_code: str = "000") ->
 
 
 def test_rtms_reads_every_page_of_a_unit() -> None:
-    client, requests = mock_client(
-        httpx.Response(200, text=rtms_page(RTMS_ROWS_PER_PAGE + 1, "10,000")),
-        httpx.Response(200, text=rtms_page(RTMS_ROWS_PER_PAGE + 1, "20,000")),
+    session, sent = mock_session(
+        (200, rtms_page(RTMS_ROWS_PER_PAGE + 1, "10,000")),
+        (200, rtms_page(RTMS_ROWS_PER_PAGE + 1, "20,000")),
     )
 
-    items = fetch_rtms_items(client, "test-key", "apart_sale", "11110", "202610")
+    items = fetch_rtms_items(session, BASE_URL, "test-key", "apart_sale", ("11110", "202610"))
 
     assert [item["dealAmount"] for item in items] == ["10,000", "20,000"]
     # 빈 태그는 None으로 담겨야 기존 bronze payload와 모양이 같다.
     assert items[0]["aptDong"] is None
-    assert [request.url.params["pageNo"] for request in requests] == ["1", "2"]
-    assert requests[0].url.path.endswith("/getRTMSDataSvcAptTradeDev")
-    assert requests[0].url.params["LAWD_CD"] == "11110"
-    assert requests[0].url.params["DEAL_YMD"] == "202610"
+    assert [query(request)["pageNo"] for request in sent] == ["1", "2"]
+    assert (sent[0].url or "").startswith(f"{BASE_URL}/1613000/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev?")
+    assert query(sent[0])["LAWD_CD"] == "11110"
+    assert query(sent[0])["DEAL_YMD"] == "202610"
 
 
 def test_rtms_no_data_is_an_empty_unit() -> None:
-    client, _ = mock_client(httpx.Response(200, text=rtms_page(0, result_code="03")))
+    session, _ = mock_session((200, rtms_page(0, result_code="03")))
 
     # 거래 없는 달도 0건으로 갈아끼워야 지난번 응답이 남지 않는다.
-    assert fetch_rtms_items(client, "test-key", "apart_rent", "11110", "202610") == []
+    assert fetch_rtms_items(session, BASE_URL, "test-key", "apart_rent", ("11110", "202610")) == []
 
 
 @pytest.mark.parametrize(
     "response",
     [
-        httpx.Response(200, text=rtms_page(0, result_code="22")),
-        httpx.Response(429, text=GATEWAY_DAILY_LIMIT_BODY),
+        (200, rtms_page(0, result_code="22")),
+        (429, GATEWAY_DAILY_LIMIT_BODY),
     ],
 )
-def test_rtms_daily_limit_is_skipped(response: httpx.Response) -> None:
-    client, _ = mock_client(response)
+def test_rtms_daily_limit_is_skipped(response: tuple[int, str]) -> None:
+    session, _ = mock_session(response)
 
     # 남은 단위도 같은 응답을 받는다. 실패로 두면 재시도가 호출량만 쓴다.
     with pytest.raises(AirflowSkipException):
-        fetch_rtms_items(client, "test-key", "apart_sale", "11110", "202610")
+        fetch_rtms_items(session, BASE_URL, "test-key", "apart_sale", ("11110", "202610"))
 
 
 def test_rtms_error_result_code_is_an_error() -> None:
-    client, _ = mock_client(httpx.Response(200, text=rtms_page(0, result_code="04")))
+    session, _ = mock_session((200, rtms_page(0, result_code="04")))
 
     with pytest.raises(RuntimeError, match="오류 04"):
-        fetch_rtms_items(client, "test-key", "apart_sale", "11110", "202610")
+        fetch_rtms_items(session, BASE_URL, "test-key", "apart_sale", ("11110", "202610"))
 
 
 def test_rtms_http_error_hides_service_key() -> None:
-    client, _ = mock_client(httpx.Response(500, text="Internal Server Error"))
+    session, _ = mock_session((500, "Internal Server Error"))
 
     with pytest.raises(RuntimeError) as error:
-        fetch_rtms_items(client, "secret-service-key", "apart_sale", "11110", "202610")
+        fetch_rtms_items(session, BASE_URL, "secret-service-key", "apart_sale", ("11110", "202610"))
 
     # 예외 메시지는 태스크 로그에 그대로 찍힌다.
     assert "secret-service-key" not in str(error.value)
+
+
+def test_rtms_connection_error_hides_service_key() -> None:
+    # requests는 연결 실패 메시지에 쿼리 문자열째 요청 URL을 싣는다.
+    session, _ = mock_session(requests.ConnectionError("Max retries exceeded with url: /x?serviceKey=secret%2Fkey"))
+
+    with pytest.raises(RuntimeError, match="ConnectionError") as error:
+        fetch_rtms_items(session, BASE_URL, "secret/key", "apart_sale", ("11110", "202610"))
+
+    # 원래 예외가 체인에 남으면 트레이스백으로 함께 찍힌다.
+    assert "secret" not in str(error.value)
+    assert error.value.__cause__ is None
+    assert error.value.__suppress_context__
 
 
 def legal_dong_row(region_cd: str) -> str:
@@ -240,52 +277,50 @@ def legal_dong_page(total_count: int, *region_cds: str, result_code: str = "INFO
 
 
 def test_legal_dong_keeps_only_sigungu_rows_across_pages() -> None:
-    client, requests = mock_client(
+    session, sent = mock_session(
         # 시도(11), 시군구(11110), 읍면동(11110101)이 섞여 온다.
-        httpx.Response(200, text=legal_dong_page(LEGAL_DONG_ROWS_PER_PAGE + 1, "1100000000", "1111000000")),
-        httpx.Response(200, text=legal_dong_page(LEGAL_DONG_ROWS_PER_PAGE + 1, "1111010100", "1114000000")),
+        (200, legal_dong_page(LEGAL_DONG_ROWS_PER_PAGE + 1, "1100000000", "1111000000")),
+        (200, legal_dong_page(LEGAL_DONG_ROWS_PER_PAGE + 1, "1111010100", "1114000000")),
     )
 
-    rows = fetch_legal_dong_rows(client, "test-key")
+    rows = fetch_legal_dong_rows(session, BASE_URL, "test-key")
 
     assert [row["region_cd"] for row in rows] == ["1111000000", "1114000000"]
-    assert [request.url.params["pageNo"] for request in requests] == ["1", "2"]
+    assert [query(request)["pageNo"] for request in sent] == ["1", "2"]
     # 빈 태그는 None으로 담겨야 기존 bronze payload와 모양이 같다.
     assert rows[0]["locat_rm"] is None
 
 
 def test_legal_dong_without_sigungu_rows_is_an_error() -> None:
-    client, _ = mock_client(httpx.Response(200, text=legal_dong_page(0, result_code="INFO-200")))
+    session, _ = mock_session((200, legal_dong_page(0, result_code="INFO-200")))
 
     # 빈 목록으로 표를 갈아끼우면 실거래 갱신이 시군구 목록을 잃는다.
     with pytest.raises(RuntimeError, match="시군구 행이 없다"):
-        fetch_legal_dong_rows(client, "test-key")
+        fetch_legal_dong_rows(session, BASE_URL, "test-key")
 
 
 def test_legal_dong_error_result_code_is_an_error() -> None:
-    client, _ = mock_client(
-        httpx.Response(
-            200, text="<StanReginCd><resultCode>ERROR-290</resultCode><resultMsg>KEY</resultMsg></StanReginCd>"
-        )
+    session, _ = mock_session(
+        (200, "<StanReginCd><resultCode>ERROR-290</resultCode><resultMsg>KEY</resultMsg></StanReginCd>")
     )
 
     with pytest.raises(RuntimeError, match="ERROR-290"):
-        fetch_legal_dong_rows(client, "test-key")
+        fetch_legal_dong_rows(session, BASE_URL, "test-key")
 
 
 def test_legal_dong_daily_limit_is_skipped() -> None:
-    client, _ = mock_client(httpx.Response(429, text=GATEWAY_DAILY_LIMIT_BODY))
+    session, _ = mock_session((429, GATEWAY_DAILY_LIMIT_BODY))
 
     # 재시도해도 같은 응답이라 실패가 아니라 건너뜀이어야 한다.
     with pytest.raises(AirflowSkipException):
-        fetch_legal_dong_rows(client, "test-key")
+        fetch_legal_dong_rows(session, BASE_URL, "test-key")
 
 
 def test_legal_dong_http_error_hides_service_key() -> None:
-    client, _ = mock_client(httpx.Response(500, text="Internal Server Error"))
+    session, _ = mock_session((500, "Internal Server Error"))
 
     with pytest.raises(RuntimeError) as error:
-        fetch_legal_dong_rows(client, "secret-service-key")
+        fetch_legal_dong_rows(session, BASE_URL, "secret-service-key")
 
     # 예외 메시지는 태스크 로그에 그대로 찍힌다.
     assert "secret-service-key" not in str(error.value)
