@@ -4,6 +4,7 @@ import json
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
+from typing import Any
 
 import httpx
 import pytest
@@ -11,9 +12,18 @@ from airflow.dag_processing.dagbag import DagBag
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
 from airflow.sdk.exceptions import AirflowSkipException
-from rtms.open_api import LEGAL_DONG_ROWS_PER_PAGE, RTMS_ROWS_PER_PAGE, fetch_legal_dong_rows, fetch_rtms_items
-from rtms.preprocess import preprocess_regions, preprocess_rtms
-from rtms.refresh import RENT_COLUMNS, SALE_COLUMNS, upsert_complexes
+from rtms_daily import (
+    LEGAL_DONG_ROWS_PER_PAGE,
+    RENT_COLUMNS,
+    RTMS_ROWS_PER_PAGE,
+    SALE_COLUMNS,
+    fetch_legal_dong_rows,
+    fetch_rtms_items,
+    preprocess_regions,
+    preprocess_rtms,
+    process_units,
+    upsert_complexes,
+)
 
 AIRFLOW_DIR = Path(__file__).resolve().parents[1]
 DAGS_DIR = AIRFLOW_DIR / "dags"
@@ -42,13 +52,6 @@ def dag() -> DAG:
     dagbag = load_dagbag()
     assert dagbag.import_errors == {}
     return dagbag.dags["rtms_daily"]
-
-
-def test_shared_package_is_not_parsed_as_dags() -> None:
-    dagbag = load_dagbag()
-
-    # 공용 패키지는 DAG를 정의하지 않는다. 파싱 대상이면 dag-processor가 매번 import만 하고 버린다.
-    assert {Path(path).name for path in dagbag.file_last_changed} == {"rtms_daily.py", "rtms_replay.py"}
 
 
 def python_task(dag: DAG, task_id: str) -> PythonOperator:
@@ -410,6 +413,41 @@ def test_complexes_take_latest_deal_and_skip_apartments_without_serial() -> None
     assert upsert_complexes(cursor, "APT", [new, old, unknown, other]) == 2
     # 데드락을 피하려고 단지 키 순으로 넣는다. 단지명은 가장 최근 거래의 것이다.
     assert [(params[4], params[6]) for params in cursor.params] == [("청운현대", "11110-0"), ("새이름", "11110-1")]
+
+
+def test_empty_bronze_empties_the_unit() -> None:
+    class FakeConnection:
+        def __init__(self) -> None:
+            self.statements: list[str] = []
+
+        def cursor(self) -> Any:
+            connection = self
+
+            class Cursor:
+                def execute(self, sql: str, params: Any = None) -> None:
+                    connection.statements.append(sql)
+
+                def executemany(self, sql: str, params: Any) -> None:
+                    connection.statements.append(sql)
+
+                def fetchall(self) -> list[Any]:
+                    return []
+
+                def close(self) -> None:
+                    pass
+
+            return Cursor()
+
+        def commit(self) -> None:
+            pass
+
+    conn = FakeConnection()
+
+    summary = process_units(conn, "apart_sale", [("11110", "202602")])
+
+    # 응답 0건은 거래 없는 단위라 정제 테이블도 비워야 한다. 해제된 거래가 남지 않는다.
+    assert any(sql.startswith("DELETE FROM sale_transactions") for sql in conn.statements)
+    assert summary == {"units": 1, "succeeded": 1, "failed": 0, "loaded": 0, "complexes": 0}
 
 
 def legal_dong_item(region_cd: str, name: str) -> dict[str, str]:
