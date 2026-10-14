@@ -756,9 +756,9 @@ def rtms_daily() -> None:
     collects = []
     processes = []
     for api_id in API_IDS:
-        # 백필 DAG와 같은 pool을 써서 같은 API를 동시에 쓰지 않고 줄을 선다. 한도가 API마다 걸리기 때문이다.
-        collect = collect_rtms.override(task_id=f"collect_{api_id}", pool=f"rtms_{api_id}")(api_id)
-        # 정제는 오픈API를 부르지 않으므로 pool을 쓰지 않는다. 같은 API의 bronze가 다 받아진 뒤에 돈다.
+        # 같은 API의 수집이 겹치지 않는 것은 max_active_runs=1과 API마다 하나인 수집 태스크로 충분하다.
+        collect = collect_rtms.override(task_id=f"collect_{api_id}")(api_id)
+        # 같은 API의 bronze가 다 받아진 뒤에 돈다.
         process = process_rtms.override(task_id=f"process_{api_id}")(api_id)
         legal_dong >> collect >> process
         collects.append(collect)

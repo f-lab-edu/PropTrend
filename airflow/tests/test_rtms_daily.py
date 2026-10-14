@@ -1,6 +1,5 @@
 """정기 갱신 DAG의 구조와 태스크가 부르는 수집 함수. 태스크 상태 규칙이 어긋나면 실패가 조용히 묻힌다."""
 
-import json
 from datetime import date, timedelta
 from decimal import Decimal
 from pathlib import Path
@@ -27,7 +26,6 @@ from rtms_daily import (
 
 AIRFLOW_DIR = Path(__file__).resolve().parents[1]
 DAGS_DIR = AIRFLOW_DIR / "dags"
-POOLS_PATH = AIRFLOW_DIR / "pools.json"
 
 API_IDS = [
     "apart_sale",
@@ -73,18 +71,6 @@ def test_collect_tasks_run_one_api_each(dag: DAG) -> None:
         assert tuple(python_task(dag, task_id).op_args) == (api_id,)
 
 
-def test_collect_tasks_queue_on_their_own_pool(dag: DAG) -> None:
-    pools = json.loads(POOLS_PATH.read_text())
-
-    for task_id in COLLECT_TASK_IDS:
-        pool = python_task(dag, task_id).pool
-        # 없는 pool을 가리키는 태스크는 스케줄되지 않고 조용히 기다리기만 한다.
-        assert pool in pools
-        # 같은 API를 정기 갱신과 백필이 동시에 쓰지 않으려면 slot이 1이어야 한다.
-        assert pools[pool]["slots"] == 1
-    assert len(pools) == len(COLLECT_TASK_IDS)
-
-
 def test_collect_tasks_run_even_if_legal_dong_fails(dag: DAG) -> None:
     for task_id in COLLECT_TASK_IDS:
         task = python_task(dag, task_id)
@@ -108,8 +94,6 @@ def test_process_tasks_follow_their_own_collect_task(dag: DAG) -> None:
         assert task.upstream_task_ids == {f"collect_{api_id}"}
         # 수집이 한도로 건너뛰어도 받은 단위는 정제돼야 한다.
         assert task.trigger_rule == "all_done"
-        # 오픈API를 부르지 않으므로 API pool에 줄 서지 않는다.
-        assert task.pool == "default_pool"
 
 
 def test_regions_follow_legal_dong_even_if_it_fails(dag: DAG) -> None:

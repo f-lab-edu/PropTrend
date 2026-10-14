@@ -49,12 +49,10 @@ services:
       timeout: 5s
       retries: 5
 
-  # 메타 DB 스키마를 맞추고 pool을 등록한다. 없는 pool을 가리키는 태스크는 스케줄되지 않고 기다리기만 한다.
+  # 메타 DB 스키마를 맞춘다.
   airflow-init:
     <<: *airflow-common
-    command: ["bash", "-c", "airflow db migrate && airflow pools import /opt/airflow/pools.json"]
-    volumes:
-      - ./pools.json:/opt/airflow/pools.json:ro
+    command: ["db", "migrate"]
     depends_on:
       airflow-metadb:
         condition: service_healthy
