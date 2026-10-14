@@ -11,17 +11,9 @@ from airflow.dag_processing.dagbag import DagBag
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
 from airflow.sdk.exceptions import AirflowSkipException
-from rtms_daily import (
-    LEGAL_DONG_ROWS_PER_PAGE,
-    RENT_COLUMNS,
-    RTMS_ROWS_PER_PAGE,
-    SALE_COLUMNS,
-    fetch_legal_dong_rows,
-    fetch_rtms_items,
-    preprocess_regions,
-    preprocess_rtms,
-    upsert_complexes,
-)
+from rtms.open_api import LEGAL_DONG_ROWS_PER_PAGE, RTMS_ROWS_PER_PAGE, fetch_legal_dong_rows, fetch_rtms_items
+from rtms.preprocess import preprocess_regions, preprocess_rtms
+from rtms.refresh import RENT_COLUMNS, SALE_COLUMNS, upsert_complexes
 
 AIRFLOW_DIR = Path(__file__).resolve().parents[1]
 DAGS_DIR = AIRFLOW_DIR / "dags"
@@ -50,6 +42,13 @@ def dag() -> DAG:
     dagbag = load_dagbag()
     assert dagbag.import_errors == {}
     return dagbag.dags["rtms_daily"]
+
+
+def test_shared_package_is_not_parsed_as_dags() -> None:
+    dagbag = load_dagbag()
+
+    # 공용 패키지는 DAG를 정의하지 않는다. 파싱 대상이면 dag-processor가 매번 import만 하고 버린다.
+    assert {Path(path).name for path in dagbag.file_last_changed} == {"rtms_daily.py", "rtms_replay.py"}
 
 
 def python_task(dag: DAG, task_id: str) -> PythonOperator:
