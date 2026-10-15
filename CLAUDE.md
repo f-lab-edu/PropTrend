@@ -13,7 +13,7 @@
 
 - `scripts/`는 공공데이터 원본 수집·bronze 적재용 별도 uv 프로젝트로, api를 import하지 않습니다. 예외로 1회성 정제 백필 `process_silver.py`는 api 가상환경에서 돌며 `api/src/model`과 `api/src/db.py`를 씁니다.
 - `airflow/`는 실거래 정기 갱신 DAG(`airflow/dags/rtms_daily.py`)의 별도 uv 프로젝트입니다. DAG는 `src`를 import하지 않고 `api/src`도 Airflow를 import하지 않습니다. `lint.sh`가 이를 검사합니다.
-- `airflow/dags/rtms_daily.py`는 `api/src/model`의 테이블을 SQL로 직접 다루고, 전처리 규칙과 유형 목록(`RTMS_APIS`)은 `scripts/src/process_silver.py`에 한 벌 더 있습니다. 모델·유형·전처리 규칙을 바꾸면 함께 수정합니다. `airflow/pyproject.toml`의 Airflow 버전과 태스크용 패키지 버전은 `airflow/Dockerfile`과 맞춥니다.
+- `airflow/dags/rtms_daily.py`는 `api/src/model`의 테이블을 SQL로 직접 다루고, 전처리 규칙과 유형 목록(`RTMS_APIS`)은 `scripts/src/process_silver.py`에 한 벌 더 있습니다. 모델·유형·전처리 규칙을 바꾸면 함께 수정합니다. 오픈API 응답 필드 기준선(`RtmsApi.known_fields`, `LEGAL_DONG_CODE_KNOWN_FIELDS`)은 DAG에만 있습니다. `airflow/pyproject.toml`의 Airflow 버전과 태스크용 패키지 버전은 `airflow/Dockerfile`과 맞춥니다.
 - `api/src/model`, `api/src/db.py`는 웹 계층(fastapi, starlette, `main`)을 참조하지 않습니다. `lint.sh`가 이를 검사합니다.
 - `scripts/`는 `api/src/model/raw.py`, `api/src/model/load_progress.py`와 DDL을 따로 갖고 있으므로, 해당 모델이 바뀌면 스크립트도 함께 수정합니다.
 

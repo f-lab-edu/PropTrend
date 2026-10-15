@@ -20,8 +20,6 @@ from .prop_transaction import (
     TransactionMixin,
 )
 from .raw import (
-    LEGAL_DONG_CODE_KNOWN_FIELDS,
-    RTMS_KNOWN_FIELDS,
     LegalDongCodeRawItem,
     RTMSRawItem,
 )
@@ -32,8 +30,6 @@ __all__ = [
     "COMPLEX_INDEX_WHERE",
     "COMPLEX_KEY_COLUMNS",
     "COMPLEX_PROPERTY_TYPES",
-    "LEGAL_DONG_CODE_KNOWN_FIELDS",
-    "RTMS_KNOWN_FIELDS",
     "Base",
     "Complex",
     "FavoriteComplex",

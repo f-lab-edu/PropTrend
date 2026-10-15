@@ -16,8 +16,10 @@ import psycopg2
 import pytest
 import rtms_daily
 from airflow.providers.postgres.hooks.postgres import PostgresHook
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from rtms_daily import (
     PROP_TREND_DB_CONN_ID,
+    RTMS_APIS,
     SALE_COLUMNS,
     SALE_INSERT_SQL,
     collect_rtms,
@@ -160,6 +162,32 @@ def put_sale_transaction(conn: Any, api_id: str, payload: dict[str, str]) -> Non
     execute(conn, SALE_INSERT_SQL, tuple(row[column] for column in SALE_COLUMNS))
 
 
+def apart_sale_item(**overrides: str) -> dict[str, str]:
+    """기준선 필드를 모두 갖춘 아파트 매매 응답 item 하나."""
+    return dict.fromkeys(sorted(RTMS_APIS["apart_sale"].known_fields), "") | overrides
+
+
+def without(item: dict[str, str], *fields: str) -> dict[str, str]:
+    return {key: value for key, value in item.items() if key not in fields}
+
+
+Responses = dict[str, list[dict[str, str]] | Exception]
+
+
+def run_collect(conn: Any, monkeypatch: pytest.MonkeyPatch, responses: Responses) -> dict[str, int]:
+    """서울 종로구 하나로 202610·202609 두 단위의 아파트 매매를 받는다. 응답은 계약년월마다 준다."""
+    put_legal_dong(conn, {"region_cd": "1111000000", "locatadd_nm": "서울특별시 종로구"})
+
+    def fetch(session: Any, base_url: str, service_key: str, api_id: str, unit: tuple[str, str]) -> list[Any]:
+        response = responses.get(unit[1], [])
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr(rtms_daily, "fetch_rtms_items", fetch)
+    return collect_rtms.function("apart_sale", **CONTEXT)
+
+
 def run_process(api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
     with closing(PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID).get_conn()) as task_conn:
         return process_units(task_conn, api_id, units)
@@ -171,8 +199,10 @@ def test_collect_replaces_only_units_of_this_run(conn: Any, monkeypatch: pytest.
     put_bronze(conn, "apart_sale", ("11110", "202608"), {"old": "회차 밖"})
     put_bronze(conn, "apart_rent", ("11110", "202610"), {"old": "다른 API"})
 
+    item = apart_sale_item(dealAmount="1,000", umdNm="청운동")
+
     def fetch(session: Any, base_url: str, service_key: str, api_id: str, unit: tuple[str, str]) -> list[Any]:
-        return [{"dealAmount": "1,000", "umdNm": "청운동"}] if unit == ("11110", "202610") else []
+        return [item] if unit == ("11110", "202610") else []
 
     monkeypatch.setattr(rtms_daily, "fetch_rtms_items", fetch)
 
@@ -182,8 +212,68 @@ def test_collect_replaces_only_units_of_this_run(conn: Any, monkeypatch: pytest.
     assert execute(conn, "SELECT api_id, deal_ymd, payload FROM rtms_raw_items ORDER BY api_id, deal_ymd") == [
         ("apart_rent", "202610", {"old": "다른 API"}),
         ("apart_sale", "202608", {"old": "회차 밖"}),
-        ("apart_sale", "202610", {"dealAmount": "1,000", "umdNm": "청운동"}),
+        ("apart_sale", "202610", item),
     ]
+
+
+def test_unknown_field_only_warns(conn: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
+    summary = run_collect(conn, monkeypatch, {"202610": [apart_sale_item(newField="1")]})
+
+    # 새 필드는 잃는 값이 없으므로 태스크를 막지 않는다.
+    assert summary == {"units": 2, "succeeded": 2, "failed": 0, "loaded": 1}
+    assert "기준선에 없는 필드가 왔다 ['newField']" in caplog.text
+
+
+def test_missing_field_fails_without_retry_after_storing_bronze(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    renamed = without(apart_sale_item(), "aptSeq") | {"aptSeqNo": "11110-1"}
+
+    with pytest.raises(AirflowFailException, match=r"\['aptSeq'\]"):
+        run_collect(conn, monkeypatch, {"202610": [renamed]})
+
+    # 받은 응답은 커밋돼 정제가 그대로 돌 수 있다.
+    assert execute(conn, "SELECT count(*) FROM rtms_raw_items") == [(1,)]
+
+
+def test_field_seen_in_any_unit_is_not_missing(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 단위 하나에 없더라도 회차 전체에서 한 번이라도 보이면 개명·삭제가 아니다.
+    responses: Responses = {
+        "202610": [without(apart_sale_item(), "aptSeq")],
+        "202609": [without(apart_sale_item(), "aptDong")],
+    }
+
+    assert run_collect(conn, monkeypatch, responses)["loaded"] == 2
+
+
+def test_empty_responses_skip_field_check(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 거래 없는 달만 있으면 기준선 전 필드가 사라진 것처럼 보인다.
+    assert run_collect(conn, monkeypatch, {})["loaded"] == 0
+
+
+def test_daily_limit_skips_after_checking_received_units(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    with pytest.raises(AirflowSkipException):
+        run_collect(conn, monkeypatch, {"202610": [apart_sale_item()], "202609": AirflowSkipException("한도")})
+
+
+def test_daily_limit_does_not_hide_missing_field(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    responses: Responses = {
+        "202610": [without(apart_sale_item(), "aptSeq")],
+        "202609": AirflowSkipException("한도"),
+    }
+
+    # skipped로 끝나면 DAG 실행이 성공으로 보여 누락이 묻힌다.
+    with pytest.raises(AirflowFailException, match="aptSeq"):
+        run_collect(conn, monkeypatch, responses)
+
+
+def test_failed_unit_retries_before_missing_field_fails(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    responses: Responses = {
+        "202610": [without(apart_sale_item(), "aptSeq")],
+        "202609": RuntimeError("일시 오류"),
+    }
+
+    # 재시도 없는 실패로 끝내면 일시 오류로 못 받은 단위가 메워지지 않는다.
+    with pytest.raises(RuntimeError, match="1/2단위 실패"):
+        run_collect(conn, monkeypatch, responses)
 
 
 def test_process_replaces_only_its_month_sigungu_and_type(conn: Any) -> None:

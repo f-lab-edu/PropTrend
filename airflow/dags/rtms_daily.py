@@ -21,8 +21,9 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 # BaseHook은 Connection 조회에 쓴다. TriggerRule은 상류 상태에 따른 실행 조건, dag·task는 TaskFlow 데코레이터다.
 from airflow.sdk import BaseHook, TriggerRule, dag, task
 
-# [Airflow] 태스크 안에서 던지면 실패가 아니라 skipped 상태로 끝나고 재시도도 하지 않는다.
-from airflow.sdk.exceptions import AirflowSkipException
+# [Airflow] AirflowSkipException은 태스크 안에서 던지면 실패가 아니라 skipped 상태로 끝나고 재시도도 하지 않는다.
+# AirflowFailException은 failed로 끝내되 retries가 남아 있어도 재시도하지 않는다.
+from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 
 # [Airflow] 태스크 실행 중 표준 logging으로 남긴 로그는 Airflow가 가로채 UI의 태스크 로그에 보여 준다.
@@ -44,21 +45,260 @@ class RtmsApi(NamedTuple):
     property_type: str
     is_sale: bool
     # 건물명 필드 이름은 유형마다 다르고, 단독·다가구에는 아예 없다.
-    building_name_field: str | None = None
+    building_name_field: str | None
+    # 응답 필드 드리프트 감지의 기준선. 이 API는 실제로 전 필드를 한 번 개명한 이력이 있다.
+    known_fields: frozenset[str]
 
 
 # scripts/src/process_silver.py의 SPECS와 같아야 한다. DAG는 src를 import하지 않으므로 따로 든다.
 # 키는 rtms_raw_items.api_id에 그대로 들어가는 슬러그다. 오타가 나면 silver가 그 행을 영영 못 찾는다.
+# 필드 기준선은 여기에만 있다. 응답 필드가 바뀌어 정리 규칙을 고칠 때 함께 고친다.
 RTMS_APIS = {
     # 단지 일련번호(aptSeq)는 상세 자료 API에만 있다. 나머지 필드는 기본 API와 같다.
-    "apart_sale": RtmsApi(f"{RTMS_API}/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev", "APT", True, "aptNm"),
-    "apart_rent": RtmsApi(f"{RTMS_API}/RTMSDataSvcAptRent/getRTMSDataSvcAptRent", "APT", False, "aptNm"),
-    "officetel_sale": RtmsApi(f"{RTMS_API}/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade", "OFFICETEL", True, "offiNm"),
-    "officetel_rent": RtmsApi(f"{RTMS_API}/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent", "OFFICETEL", False, "offiNm"),
-    "multiflex_sale": RtmsApi(f"{RTMS_API}/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade", "ROW_HOUSE", True, "mhouseNm"),
-    "multiflex_rent": RtmsApi(f"{RTMS_API}/RTMSDataSvcRHRent/getRTMSDataSvcRHRent", "ROW_HOUSE", False, "mhouseNm"),
-    "single_multi_family_sale": RtmsApi(f"{RTMS_API}/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade", "SINGLE_MULTI", True),
-    "single_multi_family_rent": RtmsApi(f"{RTMS_API}/RTMSDataSvcSHRent/getRTMSDataSvcSHRent", "SINGLE_MULTI", False),
+    "apart_sale": RtmsApi(
+        f"{RTMS_API}/RTMSDataSvcAptTradeDev/getRTMSDataSvcAptTradeDev",
+        "APT",
+        True,
+        "aptNm",
+        frozenset(
+            {
+                "sggCd",
+                "dealYear",
+                "dealMonth",
+                "dealDay",
+                "umdNm",
+                "aptNm",
+                "jibun",
+                "excluUseAr",
+                "dealAmount",
+                "floor",
+                "buildYear",
+                "cdealType",
+                "cdealDay",
+                "dealingGbn",
+                "estateAgentSggNm",
+                "rgstDate",
+                "aptDong",
+                "slerGbn",
+                "buyerGbn",
+                "landLeaseholdGbn",
+                # 상세 자료 API(RTMSDataSvcAptTradeDev)에만 있는 필드.
+                "aptSeq",
+                "umdCd",
+                "landCd",
+                "bonbun",
+                "bubun",
+                "roadNm",
+                "roadNmSggCd",
+                "roadNmCd",
+                "roadNmSeq",
+                "roadNmbCd",
+                "roadNmBonbun",
+                "roadNmBubun",
+            }
+        ),
+    ),
+    "apart_rent": RtmsApi(
+        f"{RTMS_API}/RTMSDataSvcAptRent/getRTMSDataSvcAptRent",
+        "APT",
+        False,
+        "aptNm",
+        frozenset(
+            {
+                "sggCd",
+                "dealYear",
+                "dealMonth",
+                "dealDay",
+                "umdNm",
+                "aptNm",
+                "jibun",
+                "excluUseAr",
+                "deposit",
+                "monthlyRent",
+                "floor",
+                "buildYear",
+                "contractTerm",
+                "contractType",
+                "useRRRight",
+                "preDeposit",
+                "preMonthlyRent",
+                "roadnm",
+                "roadnmsggcd",
+                "roadnmcd",
+                "roadnmseq",
+                "roadnmbcd",
+                "roadnmbonbun",
+                "roadnmbubun",
+                "aptSeq",
+            }
+        ),
+    ),
+    "officetel_sale": RtmsApi(
+        f"{RTMS_API}/RTMSDataSvcOffiTrade/getRTMSDataSvcOffiTrade",
+        "OFFICETEL",
+        True,
+        "offiNm",
+        frozenset(
+            {
+                "sggCd",
+                "dealYear",
+                "dealMonth",
+                "dealDay",
+                "sggNm",
+                "umdNm",
+                "jibun",
+                "offiNm",
+                "excluUseAr",
+                "dealAmount",
+                "floor",
+                "buildYear",
+                "cdealType",
+                "cdealDay",
+                "dealingGbn",
+                "estateAgentSggNm",
+                "slerGbn",
+                "buyerGbn",
+            }
+        ),
+    ),
+    "officetel_rent": RtmsApi(
+        f"{RTMS_API}/RTMSDataSvcOffiRent/getRTMSDataSvcOffiRent",
+        "OFFICETEL",
+        False,
+        "offiNm",
+        frozenset(
+            {
+                "sggCd",
+                "dealYear",
+                "dealMonth",
+                "dealDay",
+                "sggNm",
+                "umdNm",
+                "jibun",
+                "offiNm",
+                "excluUseAr",
+                "deposit",
+                "monthlyRent",
+                "floor",
+                "buildYear",
+                "contractTerm",
+                "contractType",
+                "useRRRight",
+                "preDeposit",
+                "preMonthlyRent",
+            }
+        ),
+    ),
+    "multiflex_sale": RtmsApi(
+        f"{RTMS_API}/RTMSDataSvcRHTrade/getRTMSDataSvcRHTrade",
+        "ROW_HOUSE",
+        True,
+        "mhouseNm",
+        frozenset(
+            {
+                "sggCd",
+                "dealYear",
+                "dealMonth",
+                "dealDay",
+                "umdNm",
+                "mhouseNm",
+                "jibun",
+                "buildYear",
+                "excluUseAr",
+                "landAr",
+                "dealAmount",
+                "floor",
+                "cdealType",
+                "cdealDay",
+                "dealingGbn",
+                "estateAgentSggNm",
+                "rgstDate",
+                "slerGbn",
+                "buyerGbn",
+                "houseType",
+            }
+        ),
+    ),
+    "multiflex_rent": RtmsApi(
+        f"{RTMS_API}/RTMSDataSvcRHRent/getRTMSDataSvcRHRent",
+        "ROW_HOUSE",
+        False,
+        "mhouseNm",
+        frozenset(
+            {
+                "sggCd",
+                "dealYear",
+                "dealMonth",
+                "dealDay",
+                "umdNm",
+                "houseType",
+                "mhouseNm",
+                "jibun",
+                "buildYear",
+                "excluUseAr",
+                "deposit",
+                "monthlyRent",
+                "floor",
+                "contractTerm",
+                "contractType",
+                "useRRRight",
+                "preDeposit",
+                "preMonthlyRent",
+            }
+        ),
+    ),
+    "single_multi_family_sale": RtmsApi(
+        f"{RTMS_API}/RTMSDataSvcSHTrade/getRTMSDataSvcSHTrade",
+        "SINGLE_MULTI",
+        True,
+        None,
+        frozenset(
+            {
+                "sggCd",
+                "dealYear",
+                "dealMonth",
+                "dealDay",
+                "umdNm",
+                "houseType",
+                "jibun",
+                "totalFloorAr",
+                "plottageAr",
+                "dealAmount",
+                "buildYear",
+                "cdealType",
+                "cdealDay",
+                "dealingGbn",
+                "estateAgentSggNm",
+                "slerGbn",
+                "buyerGbn",
+            }
+        ),
+    ),
+    "single_multi_family_rent": RtmsApi(
+        f"{RTMS_API}/RTMSDataSvcSHRent/getRTMSDataSvcSHRent",
+        "SINGLE_MULTI",
+        False,
+        None,
+        frozenset(
+            {
+                "sggCd",
+                "dealYear",
+                "dealMonth",
+                "dealDay",
+                "houseType",
+                "umdNm",
+                "totalFloorAr",
+                "deposit",
+                "monthlyRent",
+                "buildYear",
+                "contractTerm",
+                "contractType",
+                "useRRRight",
+                "preDeposit",
+                "preMonthlyRent",
+            }
+        ),
+    ),
 }
 API_IDS = tuple(RTMS_APIS)
 
@@ -489,12 +729,15 @@ def upsert_complexes(cursor: Any, property_type: str, rows: list[dict[str, Any]]
 
 
 def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
-    """API 하나의 단위마다 오픈API 응답을 받아 bronze를 갈아끼운다."""
+    """API 하나의 단위마다 오픈API 응답을 받아 bronze를 갈아끼우고, 응답 필드를 기준선과 대조한다."""
     service_key = get_service_key()
     log.info("%s: bronze %d단위", api_id, len(units))
 
     failed: list[str] = []
     loaded = 0
+    # 단위마다 대조하면 개명 하나에 같은 경고가 단위 수만큼 나가므로 회차 전체의 필드를 모아 한 번에 본다.
+    seen: set[str] = set()
+    skipped: AirflowSkipException | None = None
     # [Airflow] HttpHook.get_conn()은 Connection의 host로 base_url을 정하고, TCP keep-alive 어댑터를 단 세션을 준다.
     # hook.run()은 호출마다 세션을 새로 만들어 단위 수백 개의 연결을 재사용하지 못하므로 세션을 한 번 받아 쓴다.
     hook = HttpHook(method="GET", http_conn_id=DATA_GO_KR_CONN_ID)
@@ -506,6 +749,7 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
             try:
                 # 응답을 기다리는 동안 트랜잭션을 열어 두지 않도록 DB 작업 전에 다 받는다.
                 items = fetch_rtms_items(session, hook.base_url, service_key, api_id, unit)
+                seen.update(key for item in items for key in item)
                 # 단위마다 커밋한다. 다음 단위가 실패해도 이미 받은 응답은 남는다. 일일 호출 제한과
                 # 30일 신고 기한 때문에 같은 파라미터로 다시 불러도 같은 응답이 온다는 보장이 없다.
                 with closing(conn.cursor()) as cursor:
@@ -520,12 +764,13 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
                         [(api_id, lawd_cd, deal_ymd, json.dumps(item, ensure_ascii=False)) for item in items],
                     )
                 conn.commit()
-            except AirflowSkipException:
+            except AirflowSkipException as error:
                 # 남은 단위도 전부 같은 응답을 받는다. 받은 단위는 커밋됐으니 남은 것은 다음 실행에 맡긴다.
                 conn.rollback()
                 log.warning("%s: 일일 호출 제한으로 %d단위를 남기고 멈춘다", api_id, len(units) - done)
-                # 태스크가 skipped로 끝난다.
-                raise
+                # 바로 던지지 않는다. 그때까지 받은 응답으로도 필드를 대조해야 한다.
+                skipped = error
+                break
             except Exception:
                 # 단위 하나는 트랜잭션째 되돌아가므로 나머지를 멈추지 않는다. 실패는 끝에서 태스크 상태로 올린다.
                 conn.rollback()
@@ -534,12 +779,31 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
             else:
                 loaded += len(items)
 
+    known = RTMS_APIS[api_id].known_fields
+    missing: frozenset[str] = frozenset()
+    # 받은 item이 없으면 기준선 전 필드가 사라진 것으로 보여 오경보가 난다.
+    if seen:
+        if unknown := seen - known:
+            log.warning("%s: 기준선에 없는 필드가 왔다 %s", api_id, sorted(unknown))
+        # 응답은 값이 비어도 태그는 보내므로, 회차 전체에서 한 번도 안 보인 필드는 개명·삭제다.
+        missing = known - seen
+    # 정리 규칙이 옛 이름으로 값을 찾아 정제 테이블에 빈칸이 쌓인다. 받은 bronze는 커밋됐고 정제는 all_done이라
+    # 그대로 돈다. 재시도해도 같은 응답에 호출 한도만 쓰므로 재시도 없이 실패시켜 DAG 실행을 실패로 드러낸다.
+    drift = AirflowFailException(f"{api_id}: 기준선에 있던 필드가 응답에 없다 {sorted(missing)}") if missing else None
+
+    if skipped:
+        # skipped로 끝나면 DAG 실행이 성공으로 보여 필드 누락이 묻힌다.
+        raise drift or skipped
+
     summary = {"units": len(units), "succeeded": len(units) - len(failed), "failed": len(failed), "loaded": loaded}
     log.info("%s: bronze 갱신 종료 %s", api_id, summary)
     if failed:
         # 한 단위라도 실패하면 태스크를 실패시켜 재시도에 맡긴다. 한 API의 단위 수가 호출 한도에 한참
         # 못 미치고 회차가 짧아, 실패 단위만 고르는 것보다 통째로 다시 도는 편이 단순하다.
+        # 필드 누락보다 앞세워야 재시도가 실패 단위를 메운다. 누락은 재시도에서 다시 걸린다.
         raise RuntimeError(f"{api_id}: {len(failed)}/{len(units)}단위 실패 {failed[:FAILED_UNITS_IN_MESSAGE]}")
+    if drift:
+        raise drift
     return summary
 
 
@@ -607,7 +871,7 @@ def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
 # 신고 기한 30일과 뒤늦은 해제·정정 때문에 지난 달 데이터도 계속 바뀐다.
 RTMS_MONTHS = 2
 
-# api/src/model/raw.py의 LEGAL_DONG_CODE_KNOWN_FIELDS와 같아야 한다. 드리프트 경고의 기준선이다.
+# 법정동코드 응답 필드 드리프트 경고의 기준선. RtmsApi.known_fields처럼 여기에만 있다.
 LEGAL_DONG_CODE_KNOWN_FIELDS = frozenset(
     {
         "region_cd",
