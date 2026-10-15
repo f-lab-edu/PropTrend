@@ -6,7 +6,7 @@
 - 코드 린팅: `uv run ruff check --fix .`
 - 타입 체크: `api/`, `scripts/`, `airflow/`에서 각각 `uv run pyright` — 세 프로젝트는 가상환경이 달라 따로 실행합니다.
 - 전체 검사(포맷·린트·타입·중복): `./lint.sh` — SonarCloud 봇이 PR에서 보는 항목을 미리 확인합니다. PR마다 GitHub Actions(`.github/workflows/lint.yml`)에서도 실행됩니다.
-- 테스트: `api/`와 `airflow/`에서 각각 `uv run pytest`
+- 테스트: `api/`와 `airflow/`에서 각각 `uv run pytest` — 둘 다 로컬 Postgres(5432)가 떠 있어야 합니다. airflow의 DB 테스트는 api 가상환경으로 모델 스키마를 만듭니다.
 - 코드를 수정한 뒤에는 반드시 포맷팅과 린팅을 실행해 통과를 확인합니다.
 
 ## Project structure
