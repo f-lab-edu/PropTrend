@@ -1,4 +1,4 @@
-"""API와 갱신 파이프라인 테스트가 함께 쓰는 실제 테스트 DB 엔진."""
+"""API 테스트가 쓰는 실제 테스트 DB 엔진."""
 
 import os
 from collections.abc import AsyncIterator

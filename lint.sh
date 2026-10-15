@@ -27,17 +27,16 @@ echo "==> pyright (타입 체크)"
 (cd scripts && uv run --frozen --no-build pyright) || status=1
 (cd airflow && uv run --frozen --no-build pyright) || status=1
 
-echo "==> 파이프라인 경계 (파이프라인·모델 계층이 웹 계층을 참조하지 않는다)"
-# 파이프라인은 API 서버와 별개 프로세스로 돈다. 같은 패키지 안에 있어 임포트를 막는
-# 것이 없으므로, 웹 계층으로 되돌아가는 의존이 생기지 않았는지 여기서 확인한다.
+echo "==> 모델 경계 (모델·DB 계층이 웹 계층을 참조하지 않는다)"
+# scripts/src/process_silver.py가 API 서버 밖에서 모델과 DB 세션을 import한다. 같은 패키지 안에 있어
+# 임포트를 막는 것이 없으므로, 웹 계층으로 되돌아가는 의존이 생기지 않았는지 여기서 확인한다.
 if grep -rnE --include="*.py" "fastapi|starlette|from \\.\\.?main\\b" \
-    api/src/jobs api/src/model api/src/db.py; then
+    api/src/model api/src/db.py; then
     echo "위 파일은 웹 계층과 무관해야 합니다. 임포트를 걷어내세요."
     status=1
 fi
 
-echo "==> Airflow 경계 (파이프라인은 Airflow를 모르고, DAG는 파이프라인 코드를 import하지 않는다)"
-# 전환이 끝날 때까지 python -m src.jobs도 그대로 돌아야 한다. DAG는 옮겨 온 코드만 쓴다.
+echo "==> Airflow 경계 (api·scripts는 Airflow를 모르고, DAG는 api 코드를 import하지 않는다)"
 # 서로 다른 가상환경이라 import가 실패하긴 하지만, 그 실패는 실행 시점에야 드러난다.
 # 주석에 이름이 나오는 것은 허용하도록 import 문만 본다.
 if grep -rnE --include="*.py" "^[[:space:]]*(from|import)[[:space:]]+airflow([[:space:].]|$)" api/src scripts/src; then

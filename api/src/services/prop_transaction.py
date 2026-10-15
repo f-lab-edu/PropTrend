@@ -1,11 +1,11 @@
 import time
 from collections.abc import Sequence
+from datetime import date
 
 from sqlalchemy import func, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..exceptions import TransactionNotFoundError
-from ..jobs.utils import month_range
 from ..model.complex import COMPLEX_KEY_COLUMNS, COMPLEX_PROPERTY_TYPES, Complex
 from ..model.prop_transaction import PropertyType, RentTransaction, SaleTransaction, TransactionMixin
 from ..model.raw import LegalDongCodeRawItem
@@ -39,6 +39,8 @@ PRICE_TREND_GROUP_COLUMNS: dict[PropertyType, tuple[str, ...]] = {
 # 아파트는 재수집 전 매매의 단지 일련번호가, 연립다세대는 지번·건축년도가 빈 행이 있다.
 # 오피스텔은 빈 값이 있는 행도 NULL끼리 같은 값으로 보고 묶는다.
 EMPTY_TREND_ON_NULL_KEY_TYPES = frozenset({PropertyType.APT, PropertyType.ROW_HOUSE})
+
+DECEMBER = 12
 
 # 캐시된 지역명 데이터
 _region_names: dict[tuple[str, str], str] = {}
@@ -111,6 +113,15 @@ def _build_rent_response(
     response.region_name = names.get((transaction.sido_code, transaction.sigungu_code))
     response.complex_id = complex_ids.get(transaction.id)
     return response
+
+
+def month_range(deal_ymd: str) -> tuple[date, date]:
+    """계약년월을 `deal_date` 비교용 반개구간 [시작, 끝)으로 바꾼다."""
+    # YYYYMM 형식과 월 범위는 요청 스키마(deal_ymd의 pattern)가 이미 검증했다.
+    year, month = int(deal_ymd[:4]), int(deal_ymd[4:])
+    start = date(year, month, 1)
+    end = date(year + 1, 1, 1) if month == DECEMBER else date(year, month + 1, 1)
+    return start, end
 
 
 async def get_sale_transactions(

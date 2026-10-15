@@ -3,7 +3,6 @@
 import json
 import logging
 import time
-import zlib
 from contextlib import closing
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
@@ -48,7 +47,7 @@ class RtmsApi(NamedTuple):
     building_name_field: str | None = None
 
 
-# api/src/jobs/pipeline.py의 PIPELINES와 같아야 한다. DAG는 src를 import하지 않으므로 따로 든다.
+# scripts/src/process_silver.py의 SPECS와 같아야 한다. DAG는 src를 import하지 않으므로 따로 든다.
 # 키는 rtms_raw_items.api_id에 그대로 들어가는 슬러그다. 오타가 나면 silver가 그 행을 영영 못 찾는다.
 RTMS_APIS = {
     # 단지 일련번호(aptSeq)는 상세 자료 API에만 있다. 나머지 필드는 기본 API와 같다.
@@ -340,16 +339,10 @@ def preprocess_regions(items: list[dict[str, Any]]) -> list[dict[str, str]]:
 
 
 # 단위 사이 간격(초). 간격 없이 순차로 부르면 초당 20건을 넘겨 게이트웨이가 초당 요청 제한(사유 코드 23)으로
-# 막는다(2026-10-11 실측). jobs가 단위 처리 부담으로 냈던 초당 약 6건에 맞춘다.
+# 막는다(2026-10-11 실측). 이전 갱신 배치가 단위 처리 부담으로 냈던 초당 약 6건에 맞춘다.
 RTMS_UNIT_INTERVAL = 0.1
 # 회차 실패 메시지에 실을 좌표 수. 전량은 태스크 로그에 단위마다 남는다.
 FAILED_UNITS_IN_MESSAGE = 20
-
-# api/src/jobs/lock.py의 LOCK_NAMESPACE·scope_key()와 같은 키다. jobs CLI와 백필이 남아 있는 동안
-# 같은 범위를 동시에 갈아끼우면 두 트랜잭션이 서로의 INSERT를 못 보고 지워 행이 두 벌 남는다.
-LOCK_NAMESPACE = 0x70726F70
-# 법정동코드 bronze와 지역 목록 범위. 실거래 범위는 api_id를 그대로 쓴다.
-LEGAL_DONG_SCOPE = "legal_dong"
 
 # 아래 컬럼은 api/src/model의 정제 테이블과 같아야 한다. id·created_at은 DB 기본값에 맡긴다.
 TRANSACTION_COMMON_COLUMNS = (
@@ -456,22 +449,6 @@ COMPLEX_UPSERT_SQL = {
 }
 
 
-def try_lock(conn: Any, scope: str) -> None:
-    """범위 락을 잡는다. 다른 실행이 쥐고 있으면 태스크를 건너뛴다."""
-    # 세션 락이라 커밋을 거듭해도 태스크가 끝날 때까지 유지되고, 커넥션이 닫히면 풀린다.
-    # 기다리지 않는 것은 jobs CLI와 백필이 범위를 회차 내내 쥐고 있어서다. 그쪽이 같은 범위를
-    # 막 갈아끼우는 중이고 API 한도도 그쪽이 쓰고 있다.
-    with closing(conn.cursor()) as cursor:
-        cursor.execute(
-            "SELECT pg_try_advisory_lock(%s, %s)",
-            (LOCK_NAMESPACE, zlib.crc32(scope.encode()) & 0x7FFFFFFF),
-        )
-        acquired = cursor.fetchone()
-    conn.commit()
-    if not (acquired and acquired[0]):
-        raise AirflowSkipException(f"다른 실행이 {scope}를 갱신하고 있다")
-
-
 def sigungu_codes(hook: PostgresHook) -> list[str]:
     """법정동코드 bronze에서 실거래 API의 LAWD_CD로 쓸 시군구 코드를 읽는다."""
     # region_cd 앞 5자리가 실거래 API의 LAWD_CD다. 법정동코드 태스크가 시군구 행만 넣어 둔다.
@@ -512,7 +489,7 @@ def upsert_complexes(cursor: Any, property_type: str, rows: list[dict[str, Any]]
 
 
 def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
-    """API 하나의 단위마다 오픈API 응답을 받아 bronze를 갈아끼운다. 락은 부르는 쪽이 잡는다."""
+    """API 하나의 단위마다 오픈API 응답을 받아 bronze를 갈아끼운다."""
     service_key = get_service_key()
     log.info("%s: bronze %d단위", api_id, len(units))
 
@@ -567,7 +544,7 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
 
 
 def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
-    """bronze에 남은 응답으로 API 하나의 단위마다 정제 테이블을 갈아끼운다. 락은 부르는 쪽이 잡는다."""
+    """bronze에 남은 응답으로 API 하나의 단위마다 정제 테이블을 갈아끼운다."""
     api = RTMS_APIS[api_id]
     delete_sql, insert_sql = (SALE_DELETE_SQL, SALE_INSERT_SQL) if api.is_sale else (RENT_DELETE_SQL, RENT_INSERT_SQL)
     columns = SALE_COLUMNS if api.is_sale else RENT_COLUMNS
@@ -667,7 +644,7 @@ def rtms_units(hook: PostgresHook, context: dict[str, Any]) -> list[tuple[str, s
 def refresh_legal_dong() -> dict[str, int]:
     """법정동코드 bronze 표를 오픈API 응답으로 통째로 갈아끼운다."""
     service_key = get_service_key()
-    # 응답을 기다리는 동안 트랜잭션과 락을 쥐지 않도록 DB 작업 전에 다 받는다.
+    # 응답을 기다리는 동안 트랜잭션을 열어 두지 않도록 DB 작업 전에 다 받는다.
     hook = HttpHook(method="GET", http_conn_id=DATA_GO_KR_CONN_ID)
     with hook.get_conn() as session:
         items = fetch_legal_dong_rows(session, hook.base_url, service_key)
@@ -682,7 +659,6 @@ def refresh_legal_dong() -> dict[str, int]:
     hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
 
     with closing(hook.get_conn()) as conn:
-        try_lock(conn, LEGAL_DONG_SCOPE)
         # 비우기와 채우기는 한 트랜잭션이어야 한다. 커밋 전에 예외가 나면 닫히면서 롤백돼 어제 목록이 남는다.
         with closing(conn.cursor()) as cursor:
             cursor.execute("DELETE FROM legal_dong_code_raw_items")
@@ -707,7 +683,6 @@ def collect_rtms(api_id: str, **context: Any) -> dict[str, int]:
     units = rtms_units(hook, context)
     # 반환 타입(CompatConnection)이 psycopg2·3 공통 메서드 중 rollback을 빠뜨리고 있다.
     with closing(cast("Any", hook.get_conn())) as conn:
-        try_lock(conn, api_id)
         return collect_units(conn, api_id, units)
 
 
@@ -719,7 +694,6 @@ def process_rtms(api_id: str, **context: Any) -> dict[str, int]:
     hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
     units = rtms_units(hook, context)
     with closing(cast("Any", hook.get_conn())) as conn:
-        try_lock(conn, api_id)
         return process_units(conn, api_id, units)
 
 
@@ -729,7 +703,6 @@ def process_regions() -> dict[str, int]:
     """법정동코드 bronze로 지역 목록(regions)을 통째로 갈아끼운다."""
     hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
     with closing(hook.get_conn()) as conn:
-        try_lock(conn, LEGAL_DONG_SCOPE)
         with closing(conn.cursor()) as cursor:
             cursor.execute("SELECT payload FROM legal_dong_code_raw_items")
             rows = preprocess_regions([payload for (payload,) in cursor.fetchall()])
