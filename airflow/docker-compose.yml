@@ -11,7 +11,7 @@ x-airflow-common: &airflow-common
   image: prop-trend-airflow:latest
   environment: &airflow-env
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@airflow-metadb:5432/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_METADB_PASSWORD:?airflow/.env에 AIRFLOW_METADB_PASSWORD를 넣어야 합니다}@airflow-metadb:5432/airflow
     AIRFLOW__CORE__LOAD_EXAMPLES: "False"
     AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Seoul
     # 태스크는 스케줄러 컨테이너 안에서 돌고 Execution API로 상태를 보고한다.
@@ -39,7 +39,7 @@ services:
     image: postgres:18
     environment:
       POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_METADB_PASSWORD:?airflow/.env에 AIRFLOW_METADB_PASSWORD를 넣어야 합니다}
       POSTGRES_DB: airflow
     volumes:
       - airflow-metadb-data:/var/lib/postgresql
