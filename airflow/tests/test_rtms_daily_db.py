@@ -23,6 +23,7 @@ from rtms_daily import (
     REGION_COLUMNS,
     RENT_COLUMNS,
     RTMS_APIS,
+    RTMS_MONTHS,
     SALE_COLUMNS,
     SALE_INSERT_SQL,
     collect_rtms,
@@ -67,7 +68,10 @@ TABLES = (
 )
 
 # 2026년 10월 회차라 최근 두 달(202610, 202609)이 갱신 범위다.
-CONTEXT = {"dag_run": SimpleNamespace(run_after=pendulum.datetime(2026, 10, 15, 4, tz="Asia/Seoul"))}
+CONTEXT = {
+    "dag_run": SimpleNamespace(run_after=pendulum.datetime(2026, 10, 15, 4, tz="Asia/Seoul")),
+    "params": {"months": RTMS_MONTHS},
+}
 
 
 @pytest.fixture(scope="module")
@@ -217,6 +221,22 @@ def test_collect_replaces_only_units_of_this_run(conn: Any, monkeypatch: pytest.
         ("apart_sale", "202608", {"old": "회차 밖"}),
         ("apart_sale", "202610", item),
     ]
+
+
+def test_months_param_widens_units_from_latest(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    put_legal_dong(conn, {"region_cd": "1111000000", "locatadd_nm": "서울특별시 종로구"})
+    fetched: list[str] = []
+
+    def fetch(session: Any, base_url: str, service_key: str, api_id: str, unit: tuple[str, str]) -> list[Any]:
+        fetched.append(unit[1])
+        return []
+
+    monkeypatch.setattr(rtms_daily, "fetch_rtms_items", fetch)
+
+    collect_rtms.function("apart_sale", **CONTEXT | {"params": {"months": 3}})
+
+    # 한도로 끊겨도 최근 데이터가 먼저 반영되도록 늘린 범위도 최신 월부터 돈다.
+    assert fetched == ["202610", "202609", "202608"]
 
 
 def test_unknown_field_only_warns(conn: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:

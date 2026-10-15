@@ -19,7 +19,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 # [Airflow] airflow.sdk는 Airflow 3에서 DAG 작성자가 쓰는 공개 인터페이스다. 내부 모듈 대신 여기서 가져온다.
 # BaseHook은 Connection 조회에 쓴다. TriggerRule은 상류 상태에 따른 실행 조건, dag·task는 TaskFlow 데코레이터다.
-from airflow.sdk import BaseHook, TriggerRule, dag, task
+from airflow.sdk import BaseHook, Param, TriggerRule, dag, task
 
 # [Airflow] AirflowSkipException은 태스크 안에서 던지면 실패가 아니라 skipped 상태로 끝나고 재시도도 하지 않는다.
 # AirflowFailException은 failed로 끝내되 retries가 남아 있어도 재시도하지 않는다.
@@ -875,8 +875,11 @@ def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
     return summary
 
 
-# 신고 기한 30일과 뒤늦은 해제·정정 때문에 지난 달 데이터도 계속 바뀐다.
+# 신고 기한 30일과 뒤늦은 해제·정정 때문에 지난 달 데이터도 계속 바뀐다. 정기 실행의 갱신 개월 수다.
 RTMS_MONTHS = 2
+# 수동 실행에서 늘릴 수 있는 상한. 2개월 수집이 API당 최대 약 2분(2026-10-15 실측, 시군구 269개)이라
+# 24개월이면 약 24분·API당 약 6,500회로, 수집 태스크의 1시간 제한과 하루 호출 한도(10,000회) 안에 든다.
+MAX_RTMS_MONTHS = 24
 
 # 법정동코드 응답 필드 드리프트 경고의 기준선. RtmsApi.known_fields처럼 여기에만 있다.
 LEGAL_DONG_CODE_KNOWN_FIELDS = frozenset(
@@ -905,7 +908,9 @@ def rtms_units(hook: PostgresHook, context: dict[str, Any]) -> list[tuple[str, s
     # [Airflow] context["dag_run"]은 지금 도는 DAG 실행(DagRun)이다. run_after는 그 실행이 돌기로 예정된 시각으로,
     # 스케줄 실행이면 cron 시각(매일 04:00), 수동 실행이면 트리거한 시각이다. 재시도해도 바뀌지 않는다.
     run_after = pendulum.instance(context["dag_run"].run_after).in_timezone("Asia/Seoul")
-    months = [run_after.subtract(months=offset).format("YYYYMM") for offset in range(RTMS_MONTHS)]
+    # [Airflow] context["params"]는 DAG params에 트리거 때 넘긴 값을 덮은 것이다. 실행마다 저장되므로 재시도·clear에도
+    # 같은 값이고, 수집과 정제가 같은 개월 수를 본다.
+    months = [run_after.subtract(months=offset).format("YYYYMM") for offset in range(context["params"]["months"])]
     sigungu = sigungu_codes(hook)
     # 최신 월부터 돈다. 중간에 한도로 끊겨도 최근 데이터가 먼저 반영된다.
     return [(lawd_cd, deal_ymd) for deal_ymd in months for lawd_cd in sigungu]
@@ -998,6 +1003,18 @@ def process_regions() -> dict[str, int]:
     max_active_tasks=4,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=10)},
     tags=["rtms"],
+    # [Airflow] DAG가 받는 입력값. 정기 실행은 기본값으로 돌고, 수동 트리거는 UI 양식이나 --conf로 덮는다.
+    # 범위를 벗어난 값은 DAG 실행이 만들어지기 전에 거부된다.
+    params={
+        "months": Param(
+            RTMS_MONTHS,
+            type="integer",
+            minimum=1,
+            maximum=MAX_RTMS_MONTHS,
+            title="갱신 개월 수",
+            description="회차 기준 달부터 거슬러 올라가 갈아끼울 계약년월 수",
+        ),
+    },
 )
 def rtms_daily() -> None:
     """법정동코드와 지역 목록을 교체하고, API 8종을 따로 bronze에 받아 정제 테이블로 옮긴다."""

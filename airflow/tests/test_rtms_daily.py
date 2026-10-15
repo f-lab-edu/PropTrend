@@ -12,11 +12,13 @@ import requests
 from airflow.dag_processing.dagbag import DagBag
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
-from airflow.sdk.exceptions import AirflowSkipException
+from airflow.sdk.exceptions import AirflowSkipException, ParamValidationError
 from requests.adapters import BaseAdapter
 from rtms_daily import (
     LEGAL_DONG_ROWS_PER_PAGE,
+    MAX_RTMS_MONTHS,
     RENT_COLUMNS,
+    RTMS_MONTHS,
     RTMS_ROWS_PER_PAGE,
     SALE_COLUMNS,
     fetch_legal_dong_rows,
@@ -82,6 +84,19 @@ def test_collect_tasks_run_even_if_legal_dong_fails(dag: DAG) -> None:
         # 법정동코드 교체는 원자적이라 실패해도 어제 목록으로 갱신할 수 있다.
         assert task.trigger_rule == "all_done"
         assert task.execution_timeout == timedelta(hours=1)
+
+
+def test_months_param_defaults_to_scheduled_range(dag: DAG) -> None:
+    param = dag.params.get_param("months")
+
+    # 정기 실행은 입력이 없으므로 기본값이 곧 매일 갈아끼우는 범위다.
+    assert param.resolve() == RTMS_MONTHS
+
+
+@pytest.mark.parametrize("months", [0, MAX_RTMS_MONTHS + 1, "12"])
+def test_months_param_rejects_out_of_range(dag: DAG, months: object) -> None:
+    with pytest.raises(ParamValidationError):
+        dag.params.get_param("months").resolve(months)
 
 
 def test_legal_dong_runs_with_timeout(dag: DAG) -> None:
