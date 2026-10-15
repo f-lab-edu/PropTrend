@@ -7,26 +7,21 @@ from contextlib import closing
 from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Any, NamedTuple, cast
+from urllib.parse import quote_plus
 from xml.etree.ElementTree import ParseError
 
 import pendulum
 import requests
-
-# [Airflow] provider 패키지의 Hook. Connection 하나를 받아 외부 시스템 클라이언트를 만들어 준다.
-# HttpHook(apache-airflow-providers-http)은 requests 세션을, PostgresHook은 DB 커넥션을 준다.
 from airflow.providers.http.hooks.http import HttpHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
-
-# [Airflow] airflow.sdk는 Airflow 3에서 DAG 작성자가 쓰는 공개 인터페이스다. 내부 모듈 대신 여기서 가져온다.
-# BaseHook은 Connection 조회에 쓴다. TriggerRule은 상류 상태에 따른 실행 조건, dag·task는 TaskFlow 데코레이터다.
 from airflow.sdk import BaseHook, Param, TriggerRule, dag, task
-
-# [Airflow] AirflowSkipException은 태스크 안에서 던지면 실패가 아니라 skipped 상태로 끝나고 재시도도 하지 않는다.
-# AirflowFailException은 failed로 끝내되 retries가 남아 있어도 재시도하지 않는다.
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
+from airflow.sdk.log import mask_secret
 from defusedxml.ElementTree import fromstring as safe_xml_fromstring
 
-# [Airflow] 태스크 실행 중 표준 logging으로 남긴 로그는 Airflow가 가로채 UI의 태스크 로그에 보여 준다.
+# HttpHook이 adapter를 받지 않을 때 기본으로 다는 어댑터다. 재시도를 더하려면 직접 만들어 넘겨야 한다.
+from requests_toolbelt.adapters.socket_options import TCPKeepAliveAdapter
+
 log = logging.getLogger(__name__)
 
 # urllib3는 DEBUG에서 요청 줄을 쿼리 문자열째 남기는데, 오픈API 인증키가 거기 실린다. URL 인코딩된 키는
@@ -308,8 +303,6 @@ RTMS_SUCCESS_RESULT_CODE = "000"
 RTMS_NO_DATA_RESULT_CODE = "03"
 
 # docker-compose.yml이 AIRFLOW_CONN_* 환경변수로 만드는 Connection. 메타 DB에는 저장하지 않는다.
-# [Airflow] Connection은 외부 시스템 접속 정보(호스트·계정·비밀번호·extra)를 conn_id 하나로 묶은 것이다.
-# 환경변수 AIRFLOW_CONN_{conn_id 대문자}가 있으면 그것이 먼저 쓰이고, 없으면 메타 DB(UI에서 등록한 것)를 찾는다.
 PROP_TREND_DB_CONN_ID = "prop_trend_db"
 # host는 공공데이터포털 주소, password는 인증키다. 인증키를 password에 둬야 Airflow가 태스크 로그에서 가린다.
 # login을 비워야 HttpHook이 Basic 인증 헤더를 붙이지 않는다.
@@ -319,6 +312,9 @@ LEGAL_DONG_ENDPOINT = "1741000/StanReginCd/getStanReginCdList"
 LEGAL_DONG_ROWS_PER_PAGE = 1000  # 1회 요청 최대 건수(초과 시 에러코드 336)
 LEGAL_DONG_SUCCESS_PREFIX = "INFO"
 OPEN_API_TIMEOUT = 10
+# 세션이 연결을 재사용하므로, 서버가 유휴 연결을 닫는 순간과 요청이 겹치면 단위 하나가 연결 오류로 실패한다.
+# 실패는 태스크 재시도로 모든 단위를 다시 부르게 하므로 GET을 한 번만 다시 보낸다. HTTP 오류 응답은 다시 보내지 않는다.
+OPEN_API_RETRIES = 1
 # 일일 활용건수 초과. 실거래가 API 본문의 결과코드와 공공데이터포털 게이트웨이의 사유 코드가 같은 값이다.
 DAILY_LIMIT_CODE = "22"
 
@@ -351,6 +347,9 @@ def get_service_key() -> str:
     service_key = BaseHook.get_connection(DATA_GO_KR_CONN_ID).password
     if not service_key:
         raise RuntimeError(f"{DATA_GO_KR_CONN_ID} Connection에 인증키(password)가 없다")
+    # Airflow는 password 원문만 가린다. urllib3는 재시도할 때 요청 URL을 경고로 남기는데, 그 URL에는 requests가
+    # 퍼센트 인코딩한 인증키가 실리므로 인코딩된 형태도 가린다.
+    mask_secret(quote_plus(service_key))
     return service_key
 
 
@@ -701,7 +700,6 @@ def sigungu_codes(hook: PostgresHook) -> list[str]:
     # region_cd 앞 5자리가 실거래 API의 LAWD_CD다. 법정동코드 태스크가 시군구 행만 넣어 둔다.
     codes = [
         row[0]
-        # [Airflow] DbApiHook의 편의 메서드. 커넥션을 열어 쿼리를 실행하고 fetchall() 결과를 돌려준 뒤 닫는다.
         for row in hook.get_records(
             "SELECT DISTINCT left(payload ->> 'region_cd', 5) FROM legal_dong_code_raw_items "
             "WHERE payload ->> 'region_cd' IS NOT NULL ORDER BY 1"
@@ -745,9 +743,11 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
     # 단위마다 대조하면 개명 하나에 같은 경고가 단위 수만큼 나가므로 회차 전체의 필드를 모아 한 번에 본다.
     seen: set[str] = set()
     skipped: AirflowSkipException | None = None
-    # [Airflow] HttpHook.get_conn()은 Connection의 host로 base_url을 정하고, TCP keep-alive 어댑터를 단 세션을 준다.
-    # hook.run()은 호출마다 세션을 새로 만들어 단위 수백 개의 연결을 재사용하지 못하므로 세션을 한 번 받아 쓴다.
-    hook = HttpHook(method="GET", http_conn_id=DATA_GO_KR_CONN_ID)
+    hook = HttpHook(
+        method="GET",
+        http_conn_id=DATA_GO_KR_CONN_ID,
+        adapter=TCPKeepAliveAdapter(max_retries=OPEN_API_RETRIES),
+    )
     with hook.get_conn() as session:
         for done, unit in enumerate(units):
             lawd_cd, deal_ymd = unit
@@ -905,11 +905,7 @@ def rtms_units(hook: PostgresHook, context: dict[str, Any]) -> list[tuple[str, s
     """이번 회차의 갱신 단위(시군구, 계약년월)를 최신 월부터 만든다."""
     # "이번 달"은 실행 시각이 아니라 회차 기준 시각(KST)으로 센다. 재시도해도, bronze와 silver가 따로 돌아도,
     # 지난 회차를 clear로 다시 돌려도 그 회차의 달을 가리킨다.
-    # [Airflow] context["dag_run"]은 지금 도는 DAG 실행(DagRun)이다. run_after는 그 실행이 돌기로 예정된 시각으로,
-    # 스케줄 실행이면 cron 시각(매일 04:00), 수동 실행이면 트리거한 시각이다. 재시도해도 바뀌지 않는다.
     run_after = pendulum.instance(context["dag_run"].run_after).in_timezone("Asia/Seoul")
-    # [Airflow] context["params"]는 DAG params에 트리거 때 넘긴 값을 덮은 것이다. 실행마다 저장되므로 재시도·clear에도
-    # 같은 값이고, 수집과 정제가 같은 개월 수를 본다.
     months = [run_after.subtract(months=offset).format("YYYYMM") for offset in range(context["params"]["months"])]
     sigungu = sigungu_codes(hook)
     # 최신 월부터 돈다. 중간에 한도로 끊겨도 최근 데이터가 먼저 반영된다.
@@ -921,7 +917,11 @@ def refresh_legal_dong() -> dict[str, int]:
     """법정동코드 bronze 표를 오픈API 응답으로 통째로 갈아끼운다."""
     service_key = get_service_key()
     # 응답을 기다리는 동안 트랜잭션을 열어 두지 않도록 DB 작업 전에 다 받는다.
-    hook = HttpHook(method="GET", http_conn_id=DATA_GO_KR_CONN_ID)
+    hook = HttpHook(
+        method="GET",
+        http_conn_id=DATA_GO_KR_CONN_ID,
+        adapter=TCPKeepAliveAdapter(max_retries=OPEN_API_RETRIES),
+    )
     with hook.get_conn() as session:
         items = fetch_legal_dong_rows(session, hook.base_url, service_key)
 
@@ -1003,8 +1003,6 @@ def process_regions() -> dict[str, int]:
     max_active_tasks=4,
     default_args={"retries": 1, "retry_delay": timedelta(minutes=10)},
     tags=["rtms"],
-    # [Airflow] DAG가 받는 입력값. 정기 실행은 기본값으로 돌고, 수동 트리거는 UI 양식이나 --conf로 덮는다.
-    # 범위를 벗어난 값은 DAG 실행이 만들어지기 전에 거부된다.
     params={
         "months": Param(
             RTMS_MONTHS,
@@ -1053,7 +1051,6 @@ def rtms_daily() -> None:
         # DAG 실행 상태는 리프 태스크로 정해진다. summarize가 all_done으로 성공하면 상류 실패가 묻힌다.
         raise RuntimeError("갱신 태스크 중 실패한 것이 있다")
 
-    # [Airflow] 리스트를 >>의 한쪽에 두면 리스트의 모든 태스크와 한꺼번에 의존 관계를 맺는다.
     processes >> summarize()
     [legal_dong, regions, *collects, *processes] >> watcher()
 

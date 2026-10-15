@@ -11,6 +11,7 @@ dependencies = [
     # 아래는 이미지에 없거나 Airflow가 간접으로만 끌어오는 것이다. 이미지에 설치하는 버전(Dockerfile)과 맞춘다.
     "defusedxml==0.7.1",
     "requests==2.34.2",
+    "requests-toolbelt==1.0.0",
 ]
 
 [tool.ruff]

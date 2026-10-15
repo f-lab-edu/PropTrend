@@ -1852,6 +1852,7 @@ dependencies = [
     { name = "apache-airflow-providers-postgres" },
     { name = "defusedxml" },
     { name = "requests" },
+    { name = "requests-toolbelt" },
 ]
 
 [package.dev-dependencies]
@@ -1867,6 +1868,7 @@ requires-dist = [
     { name = "apache-airflow-providers-postgres", specifier = "==7.0.2" },
     { name = "defusedxml", specifier = "==0.7.1" },
     { name = "requests", specifier = "==2.34.2" },
+    { name = "requests-toolbelt", specifier = "==1.0.0" },
 ]
 
 [package.metadata.requires-dev]
