@@ -688,6 +688,13 @@ COMPLEX_UPSERT_SQL = {
     """,
 }
 
+# api/src/model/region.py의 컬럼과 같아야 한다. 값은 preprocess_regions가 만든 dict에서 이름으로 꺼낸다.
+REGION_COLUMNS = ("sido_code", "sigungu_code", "sido_name", "sigungu_name")
+REGION_INSERT_SQL = (
+    f"INSERT INTO regions ({', '.join(REGION_COLUMNS)}) "  # noqa: S608
+    f"VALUES ({', '.join(f'%({column})s' for column in REGION_COLUMNS)})"
+)
+
 
 def sigungu_codes(hook: PostgresHook) -> list[str]:
     """법정동코드 bronze에서 실거래 API의 LAWD_CD로 쓸 시군구 코드를 읽는다."""
@@ -976,11 +983,7 @@ def process_regions() -> dict[str, int]:
             # 비우기와 채우기는 한 트랜잭션이어야 한다. 사이에서 끊기면 지역 필터가 사라진다.
             cursor.execute("DELETE FROM regions")
             deleted = cursor.rowcount
-            cursor.executemany(
-                "INSERT INTO regions (sido_code, sigungu_code, sido_name, sigungu_name) "
-                "VALUES (%(sido_code)s, %(sigungu_code)s, %(sido_name)s, %(sigungu_name)s)",
-                rows,
-            )
+            cursor.executemany(REGION_INSERT_SQL, rows)
         conn.commit()
 
     log.info("지역 %d건 교체(삭제 %d건)", len(rows), deleted)

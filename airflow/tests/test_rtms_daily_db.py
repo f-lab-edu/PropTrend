@@ -18,7 +18,10 @@ import rtms_daily
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from rtms_daily import (
+    COMPLEX_COLUMNS,
     PROP_TREND_DB_CONN_ID,
+    REGION_COLUMNS,
+    RENT_COLUMNS,
     RTMS_APIS,
     SALE_COLUMNS,
     SALE_INSERT_SQL,
@@ -274,6 +277,28 @@ def test_failed_unit_retries_before_missing_field_fails(conn: Any, monkeypatch: 
     # 재시도 없는 실패로 끝내면 일시 오류로 못 받은 단위가 메워지지 않는다.
     with pytest.raises(RuntimeError, match="1/2단위 실패"):
         run_collect(conn, monkeypatch, responses)
+
+
+@pytest.mark.parametrize(
+    ("table", "columns", "defaults"),
+    [
+        ("sale_transactions", SALE_COLUMNS, {"id", "created_at"}),
+        ("rent_transactions", RENT_COLUMNS, {"id", "created_at"}),
+        # property_type은 유형마다 upsert문에 값으로 박혀 있다. updated_at은 upsert문이 now()로 고친다.
+        ("complexes", ("property_type", *COMPLEX_COLUMNS), {"id", "created_at", "updated_at"}),
+        ("regions", REGION_COLUMNS, set()),
+    ],
+)
+def test_insert_columns_match_model_table(conn: Any, table: str, columns: tuple[str, ...], defaults: set[str]) -> None:
+    rows = execute(
+        conn,
+        "SELECT column_name FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = %s",
+        (table,),
+    )
+
+    # 모델에 컬럼이 늘었는데 DAG 목록을 놓치면 적재문이 그 컬럼을 건너뛰어 오류 없이 NULL만 쌓인다.
+    # defaults는 DB 기본값에 맡기는 컬럼이다.
+    assert {name for (name,) in rows} - defaults == set(columns)
 
 
 def test_process_replaces_only_its_month_sigungu_and_type(conn: Any) -> None:
