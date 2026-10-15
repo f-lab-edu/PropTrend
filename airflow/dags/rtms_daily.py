@@ -799,7 +799,15 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
     drift = AirflowFailException(f"{api_id}: 기준선에 있던 필드가 응답에 없다 {sorted(missing)}") if missing else None
 
     if skipped:
-        # skipped로 끝나면 DAG 실행이 성공으로 보여 필드 누락이 묻힌다.
+        # skipped로 끝나면 DAG 실행이 성공으로 보여 앞서 실패한 단위와 필드 누락이 묻힌다.
+        if failed:
+            # 재시도는 한도가 풀리기 전에 돌아 첫 단위에서 다시 skipped로 끝나므로, 실패 단위를 메우지 못하고
+            # 실패만 다시 묻힌다. 재시도 없이 실패시켜 드러낸다.
+            if drift:
+                log.error("%s", drift)
+            raise AirflowFailException(
+                f"{api_id}: 일일 호출 제한 전 {len(failed)}/{len(units)}단위 실패 {failed[:FAILED_UNITS_IN_MESSAGE]}"
+            )
         raise drift or skipped
 
     summary = {"units": len(units), "succeeded": len(units) - len(failed), "failed": len(failed), "loaded": loaded}

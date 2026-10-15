@@ -288,6 +288,17 @@ def test_daily_limit_does_not_hide_missing_field(conn: Any, monkeypatch: pytest.
         run_collect(conn, monkeypatch, responses)
 
 
+def test_daily_limit_does_not_hide_failed_unit(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    responses: Responses = {
+        "202610": RuntimeError("일시 오류"),
+        "202609": AirflowSkipException("한도"),
+    }
+
+    # 재시도는 한도가 풀리기 전에 돌아 skipped로 끝나므로, 재시도 없는 실패로 끝나야 DAG 실행에 드러난다.
+    with pytest.raises(AirflowFailException, match="1/2단위 실패"):
+        run_collect(conn, monkeypatch, responses)
+
+
 def test_failed_unit_retries_before_missing_field_fails(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     responses: Responses = {
         "202610": [without(apart_sale_item(), "aptSeq")],
