@@ -909,11 +909,21 @@ LEGAL_DONG_CODE_KNOWN_FIELDS = frozenset(
 
 
 def rtms_units(hook: PostgresHook, context: dict[str, Any]) -> list[tuple[str, str]]:
-    """이번 회차의 갱신 단위(시군구, 계약년월)를 최신 월부터 만든다."""
+    """이번 회차의 갱신 단위(시군구, 계약년월)를 기준 달부터 거슬러 최신 월부터 만든다."""
+    params = context["params"]
     # "이번 달"은 실행 시각이 아니라 회차 기준 시각(KST)으로 센다. 재시도해도, bronze와 silver가 따로 돌아도,
-    # 지난 회차를 clear로 다시 돌려도 그 회차의 달을 가리킨다.
+    # 지난 회차를 clear로 다시 돌려도 그 회차의 달을 가리킨다. 입력한 기준 계약년월도 실행의 conf에 남아 같다.
     run_after = pendulum.instance(context["dag_run"].run_after).in_timezone("Asia/Seoul")
-    months = [run_after.subtract(months=offset).format("YYYYMM") for offset in range(context["params"]["months"])]
+    base = run_after
+    if params["base_ymd"]:
+        base = pendulum.from_format(params["base_ymd"], "YYYYMM", tz="Asia/Seoul")
+        # 아직 오지 않은 달은 응답이 비어 있어 정제 테이블의 그 달을 빈 목록으로 갈아끼운다. 형식은 Param이 막지만
+        # 회차 기준 달과의 비교는 스키마로 나타낼 수 없다.
+        if base > run_after:
+            raise ValueError(
+                f"기준 계약년월 {params['base_ymd']}이 회차 기준 달({run_after.format('YYYYMM')})보다 뒤다"
+            )
+    months = [base.subtract(months=offset).format("YYYYMM") for offset in range(params["months"])]
     sigungu = sigungu_codes(hook)
     # 최신 월부터 돈다. 중간에 한도로 끊겨도 최근 데이터가 먼저 반영된다.
     return [(lawd_cd, deal_ymd) for deal_ymd in months for lawd_cd in sigungu]
@@ -1067,7 +1077,16 @@ def process_regions() -> dict[str, int]:
             minimum=1,
             maximum=MAX_RTMS_MONTHS,
             title="갱신 개월 수",
-            description="회차 기준 달부터 거슬러 올라가 갈아끼울 계약년월 수",
+            description="기준 계약년월부터 거슬러 올라가 갈아끼울 계약년월 수",
+        ),
+        # 갱신 범위의 끝 달. 비우면 회차 기준 달이라 정기 실행은 입력 없이 최근 달을 갈아끼운다.
+        # 지난 달 하나가 잘못 들어갔을 때 그 달만 다시 돌리려면 끝 달을 실행 시각과 따로 정할 수 있어야 한다.
+        "base_ymd": Param(
+            None,
+            type=["null", "string"],
+            pattern=r"^\d{4}(0[1-9]|1[0-2])$",
+            title="기준 계약년월",
+            description="YYYYMM. 비우면 회차 기준 달이다. 예: 202503과 갱신 개월 수 1이면 2025년 3월만 갈아끼운다",
         ),
     },
 )

@@ -137,6 +137,17 @@ def test_months_param_rejects_out_of_range(dag: DAG, months: object) -> None:
         dag.params.get_param("months").resolve(months)
 
 
+def test_base_ymd_param_defaults_to_run_month(dag: DAG) -> None:
+    # 비어 있어야 정기 실행이 회차 기준 달부터 갈아끼운다.
+    assert dag.params.get_param("base_ymd").resolve() is None
+
+
+@pytest.mark.parametrize("base_ymd", ["2025-03", "202513", "202500", "20253", 202503])
+def test_base_ymd_param_rejects_malformed(dag: DAG, base_ymd: object) -> None:
+    with pytest.raises(ParamValidationError):
+        dag.params.get_param("base_ymd").resolve(base_ymd)
+
+
 def test_legal_dong_runs_with_timeout(dag: DAG) -> None:
     assert python_task(dag, "refresh_legal_dong").execution_timeout == timedelta(minutes=10)
 

@@ -73,7 +73,7 @@ TABLES = (
 # 2026년 10월 회차라 최근 두 달(202610, 202609)이 갱신 범위다.
 CONTEXT = {
     "dag_run": SimpleNamespace(run_after=pendulum.datetime(2026, 10, 15, 4, tz="Asia/Seoul")),
-    "params": {"months": RTMS_MONTHS},
+    "params": {"months": RTMS_MONTHS, "base_ymd": None},
 }
 
 
@@ -272,7 +272,7 @@ def test_chunks_split_months_and_sido_from_latest(conn: Any) -> None:
     for region_cd in ("1111000000", "4111000000", "1114000000"):
         put_legal_dong(conn, {"region_cd": region_cd, "locatadd_nm": "시군구"})
 
-    chunks = plan_rtms_chunks.function(**CONTEXT | {"params": {"months": 3}})
+    chunks = plan_rtms_chunks.function(**CONTEXT | {"params": {"months": 3, "base_ymd": None}})
 
     # 한도로 끊겨도 최근 데이터가 먼저 반영되도록 늘린 범위도 최신 월이 앞 map_index를 받는다.
     assert [(chunk["deal_ymd"], chunk["sido"], chunk["lawd_cds"]) for chunk in chunks] == [
@@ -283,6 +283,31 @@ def test_chunks_split_months_and_sido_from_latest(conn: Any) -> None:
         ("202608", "11", ["11110", "11140"]),
         ("202608", "41", ["41110"]),
     ]
+
+
+@pytest.mark.parametrize(
+    ("months", "expected"),
+    [
+        # 지난 달 하나가 잘못 들어갔을 때 그 달만 다시 돌린다.
+        (1, ["202503"]),
+        # 해를 넘겨 거슬러 올라간다.
+        (3, ["202503", "202502", "202501"]),
+    ],
+)
+def test_base_ymd_sets_end_of_range_apart_from_run(conn: Any, months: int, expected: list[str]) -> None:
+    put_legal_dong(conn, {"region_cd": "1111000000", "locatadd_nm": "서울특별시 종로구"})
+
+    chunks = plan_rtms_chunks.function(**CONTEXT | {"params": {"months": months, "base_ymd": "202503"}})
+
+    assert [chunk["deal_ymd"] for chunk in chunks] == expected
+
+
+def test_base_ymd_after_run_month_is_rejected(conn: Any) -> None:
+    put_legal_dong(conn, {"region_cd": "1111000000", "locatadd_nm": "서울특별시 종로구"})
+
+    # 아직 오지 않은 달은 빈 응답으로 정제 테이블의 그 달을 비운다.
+    with pytest.raises(ValueError, match="202611"):
+        plan_rtms_chunks.function(**CONTEXT | {"params": {"months": 1, "base_ymd": "202611"}})
 
 
 def test_check_sums_summaries_of_succeeded_chunks(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
