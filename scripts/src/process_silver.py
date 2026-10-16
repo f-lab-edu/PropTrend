@@ -3,7 +3,7 @@
 load_results.py로 bronze 백필을 마친 뒤 한 번 돌린다. 정기 갱신(airflow/dags/rtms_daily.py)의 정제 단계를
 (유형, 계약년월) 전국 단위로 넓혀 돌린다. 오픈API는 부르지 않는다.
 
-전처리 규칙은 rtms_daily.py의 preprocess_rtms와 같아야 한다. DAG는 Airflow 가상환경에서 돌아 이 배치가
+전처리 규칙은 airflow/dags/rtms/preprocess.py의 preprocess_rtms와 같아야 한다. DAG는 Airflow 가상환경에서 돌아 이 배치가
 import할 수 없으므로 한 벌을 여기 둔다. 한쪽 규칙을 바꾸면 다른 쪽도 함께 고친다. 어긋나면 백필한 달과
 정기 갱신이 다시 만든 달의 값이 조용히 달라진다.
 
@@ -231,7 +231,7 @@ class SilverSpec:
     building_name_field: str | None = None
 
 
-# airflow/dags/rtms_daily.py의 RTMS_APIS와 같아야 한다.
+# airflow/dags/rtms/apis.py의 RTMS_APIS와 같아야 한다.
 SPECS = (
     SilverSpec("apart_sale", PropertyType.APT, SalePreprocessor, SaleTransaction, "aptNm"),
     SilverSpec("apart_rent", PropertyType.APT, RentPreprocessor, RentTransaction, "aptNm"),

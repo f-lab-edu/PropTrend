@@ -14,27 +14,23 @@ from typing import Any, NamedTuple
 import pendulum
 import psycopg2
 import pytest
-import rtms_daily
+import rtms.load
+import rtms.tasks
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
-from rtms_daily import (
-    COMPLEX_COLUMNS,
+from rtms.apis import RTMS_APIS
+from rtms.db import COMPLEX_COLUMNS, PROP_TREND_DB_CONN_ID, REGION_COLUMNS, RENT_COLUMNS, SALE_COLUMNS, SALE_INSERT_SQL
+from rtms.load import process_units
+from rtms.preprocess import preprocess_rtms
+from rtms.tasks import (
     FIELDS_XCOM_KEY,
-    PROP_TREND_DB_CONN_ID,
-    REGION_COLUMNS,
-    RENT_COLUMNS,
-    RTMS_APIS,
-    RTMS_MONTHS,
-    SALE_COLUMNS,
-    SALE_INSERT_SQL,
     check_rtms,
     collect_rtms,
     plan_rtms_chunks,
-    preprocess_rtms,
     process_regions,
-    process_units,
     refresh_legal_dong,
 )
+from rtms_daily import RTMS_MONTHS
 
 API_DIR = Path(__file__).resolve().parents[2] / "api"
 
@@ -223,7 +219,7 @@ def run_collect(conn: Any, monkeypatch: pytest.MonkeyPatch, responses: Responses
             raise response
         return response
 
-    monkeypatch.setattr(rtms_daily, "fetch_rtms_items", fetch)
+    monkeypatch.setattr(rtms.load, "fetch_rtms_items", fetch)
     chunks = plan_rtms_chunks.function(**CONTEXT)
     ti = FakeTaskInstance(chunks)
     outcomes: list[dict[str, int] | Exception] = []
@@ -537,7 +533,7 @@ def test_regions_are_replaced_from_legal_dong_bronze(conn: Any) -> None:
 def test_legal_dong_bronze_is_replaced(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     put_legal_dong(conn, {"region_cd": "9999900000", "locatadd_nm": "옛 지역"})
     new_row = {"region_cd": "1111000000", "locatadd_nm": "서울특별시 종로구"}
-    monkeypatch.setattr(rtms_daily, "fetch_legal_dong_rows", lambda session, base_url, service_key: [new_row])
+    monkeypatch.setattr(rtms.tasks, "fetch_legal_dong_rows", lambda session, base_url, service_key: [new_row])
 
     summary = refresh_legal_dong.function()
 
