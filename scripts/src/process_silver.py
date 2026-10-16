@@ -3,9 +3,9 @@
 load_results.py로 bronze 백필을 마친 뒤 한 번 돌린다. 정기 갱신(airflow/dags/rtms_daily.py)의 정제 단계를
 (유형, 계약년월) 전국 단위로 넓혀 돌린다. 오픈API는 부르지 않는다.
 
-전처리 규칙은 airflow/dags/rtms/preprocess.py의 preprocess_rtms와 같아야 한다. DAG는 Airflow 가상환경에서 돌아 이 배치가
-import할 수 없으므로 한 벌을 여기 둔다. 한쪽 규칙을 바꾸면 다른 쪽도 함께 고친다. 어긋나면 백필한 달과
-정기 갱신이 다시 만든 달의 값이 조용히 달라진다.
+전처리 규칙과 유형 목록은 정기 갱신의 것(airflow/dags/rtms/preprocess.py, rtms/apis.py)을 그대로 import한다.
+두 벌로 두면 한쪽만 고쳤을 때 백필한 달과 정기 갱신이 다시 만든 달의 값이 조용히 달라진다. 두 모듈은 표준
+라이브러리만 써서 Airflow가 없는 api 가상환경에서도 import된다(lint.sh가 확인한다).
 
 같은 달을 동시에 지우고 넣으면 한쪽 결과가 중복되거나 사라지므로, rtms_daily DAG를 일시정지한 뒤 돌린다.
 
@@ -18,26 +18,27 @@ import logging
 import re
 import sys
 import time
-from abc import ABC, abstractmethod
-from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
-from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any, cast
 
 from dotenv import load_dotenv
-from sqlalchemy import CursorResult, RowMapping, delete, insert, select
+from sqlalchemy import CursorResult, delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "api"))
+# DAG 폴더를 올려 정기 갱신의 rtms 패키지를 import한다. Airflow가 DAG 파일을 읽을 때와 같은 기준 경로다.
+sys.path.insert(0, str(REPO_ROOT / "airflow" / "dags"))
 
 # uv run --project api는 api/.env를 자동으로 읽지 않는다. 명시적으로 읽지 않으면
 # DATABASE_URL이 src/db.py의 기본값으로 조용히 폴백한다.
 load_dotenv(REPO_ROOT / "api" / ".env")
 
-# api 프로젝트를 import 경로에 올린 뒤에야 아래 모듈들을 불러올 수 있다.
+# api 프로젝트와 DAG 폴더를 import 경로에 올린 뒤에야 아래 모듈들을 불러올 수 있다.
+from rtms.apis import RTMS_APIS  # noqa: E402
+from rtms.preprocess import preprocess_rtms  # noqa: E402
 from src.db import create_tables, dispose_engine, session_scope  # noqa: E402
 from src.model import Base, PropertyType, RentTransaction, RTMSRawItem, SaleTransaction  # noqa: E402
 
@@ -45,177 +46,8 @@ logger = logging.getLogger("process_silver")
 
 YYYYMM_PATTERN = re.compile(r"^\d{6}$")
 
-SGG_CD_LENGTH = 5
 DECEMBER = 12
 CHUNK_SIZE = 1000
-
-ROAD_ADDRESS_FIELDS = (
-    "roadnm",
-    "roadnmsggcd",
-    "roadnmcd",
-    "roadnmseq",
-    "roadnmbcd",
-    "roadnmbonbun",
-    "roadnmbubun",
-)
-
-
-class RawTablePreprocessor(ABC):
-    """실거래가 8종의 공통 변환기. 유형별 차이는 건물명 필드뿐이라 주입받는다."""
-
-    def __init__(
-        self,
-        property_type: PropertyType,
-        api_id: str,
-        building_name_field: str | None = None,
-    ) -> None:
-        self.property_type = property_type
-        self.api_id = api_id
-        self.building_name_field = building_name_field
-
-    def preprocess(self, rows: Sequence[RowMapping]) -> list[dict[str, Any]]:
-        """bronze의 `id`/`payload` 매핑을 정제 테이블 컬럼명 dict 목록으로 바꾼다."""
-        return [self._convert(row["id"], row["payload"]) for row in rows]
-
-    def _convert(self, raw_id: int, payload: dict[str, Any]) -> dict[str, Any]:
-        """행 하나를 변환한다. 실패하면 어느 API 어느 bronze 행인지 붙여 다시 던진다."""
-        try:
-            return self._common(payload) | self._specific(payload)
-        except (ValueError, InvalidOperation) as error:
-            raise ValueError(f"{self.api_id} 가공 실패(rtms_raw_items.id={raw_id}): {error}") from error
-
-    def _common(self, row: dict[str, Any]) -> dict[str, Any]:
-        """매매·전월세가 함께 쓰는 컬럼을 채운다(draft.md 2절)."""
-        sido_code, sigungu_code = _split_sgg_cd(_required(row, "sggCd"))
-        building_name = _text(row.get(self.building_name_field)) if self.building_name_field else None
-        return {
-            "property_type": self.property_type,
-            "house_type": _text(row.get("houseType")),
-            "sido_code": sido_code,
-            "sigungu_code": sigungu_code,
-            "umd_name": _text(row.get("umdNm")),
-            "jibun": _text(row.get("jibun")),
-            "building_name": building_name,
-            "deal_date": date(
-                int(_required(row, "dealYear")),
-                int(_required(row, "dealMonth")),
-                int(_required(row, "dealDay")),
-            ),
-            "exclusive_use_area": _decimal(row.get("excluUseAr")),
-            "floor": _int(row.get("floor")),
-            "build_year": _int(row.get("buildYear")),
-            "total_floor_area": _decimal(row.get("totalFloorAr")),
-        }
-
-    @abstractmethod
-    def _specific(self, row: dict[str, Any]) -> dict[str, Any]:
-        """매매/전월세 각각의 고유 컬럼을 채운다."""
-
-
-class SalePreprocessor(RawTablePreprocessor):
-    """매매 4종의 payload를 `sale_transaction` 행으로 바꾼다."""
-
-    def _specific(self, row: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "plottage_area": _decimal(row.get("plottageAr")),
-            "land_area": _decimal(row.get("landAr")),
-            "deal_amount": _amount(_required(row, "dealAmount")),
-            "dealing_type": _text(row.get("dealingGbn")),
-            "estate_agent_sigungu_name": _text(row.get("estateAgentSggNm")),
-            "seller_type": _text(row.get("slerGbn")),
-            "buyer_type": _text(row.get("buyerGbn")),
-            "cancel_deal_type": _text(row.get("cdealType")),
-            "cancel_deal_date": _short_date(row.get("cdealDay")),
-            "registration_date": _short_date(row.get("rgstDate")),
-            "apartment_dong": _text(row.get("aptDong")),
-            "land_leasehold_type": _text(row.get("landLeaseholdGbn")),
-            "sigungu_name": _text(row.get("sggNm")),
-            "apartment_serial_number": _text(row.get("aptSeq")),
-        }
-
-
-class RentPreprocessor(RawTablePreprocessor):
-    """전월세 4종의 payload를 `rent_transaction` 행으로 바꾼다."""
-
-    def _specific(self, row: dict[str, Any]) -> dict[str, Any]:
-        return {
-            "deposit": _amount(_required(row, "deposit")),
-            "monthly_rent": _amount(_required(row, "monthlyRent")),
-            "contract_term": _text(row.get("contractTerm")),
-            "contract_type": _text(row.get("contractType")),
-            "renewal_right_used": _text(row.get("useRRRight")),
-            # 종전 보증금은 음수로 들어오는 행이 110건 있다. 원본 값을 그대로 둔다.
-            "previous_deposit": _optional_amount(row.get("preDeposit")),
-            "previous_monthly_rent": _optional_amount(row.get("preMonthlyRent")),
-            "sigungu_name": _text(row.get("sggNm")),
-            "apartment_serial_number": _text(row.get("aptSeq")),
-            "road_address_detail": _road_address(row),
-        }
-
-
-def _split_sgg_cd(sgg_cd: str) -> tuple[str, str]:
-    """RTMS의 5자리 `sggCd`를 시도 2자리 + 시군구 3자리로 나눈다."""
-    # isdigit()만으로는 부족하다. 아라비아-인도 숫자 같은 비ASCII 숫자도 True다.
-    if len(sgg_cd) != SGG_CD_LENGTH or not (sgg_cd.isascii() and sgg_cd.isdigit()):
-        raise ValueError(f"sgg_cd는 숫자 5자리여야 한다: {sgg_cd!r}")
-    return sgg_cd[:2], sgg_cd[2:]
-
-
-def _text(value: str | None) -> str | None:
-    """원본이 쓰는 빈 값 세 가지(None, "", 공백 한 칸)를 모두 None으로 맞춘다."""
-    if value is None:
-        return None
-    return value.strip() or None
-
-
-def _required(row: dict[str, Any], field: str) -> str:
-    """비어 있으면 안 되는 필드를 읽는다. 비어 있으면 예외를 던진다.
-
-    payload에는 키 자체가 없을 수 있다. `row[field]`로 읽으면 `KeyError`가 나는데
-    `_convert`가 잡지 않는 예외라 달 전체가 터진다. 없는 키를 빈 값과 같게 다룬다.
-    """
-    value = _text(row.get(field))
-    if value is None:
-        raise ValueError(f"{field}가 비어 있다")
-    return value
-
-
-def _int(value: str | None) -> int | None:
-    """빈 값은 None으로 두고 int로 바꾼다."""
-    text = _text(value)
-    return None if text is None else int(text)
-
-
-def _decimal(value: str | None) -> Decimal | None:
-    """빈 값은 None으로 두고 Decimal로 바꾼다."""
-    text = _text(value)
-    return None if text is None else Decimal(text)
-
-
-def _amount(value: str) -> int:
-    """만원 단위 콤마 문자열("36,900")을 원 단위 정수로 바꾼다."""
-    return int(value.replace(",", "")) * 10_000
-
-
-def _optional_amount(value: str | None) -> int | None:
-    """빈 값을 허용하는 금액 필드용 `_amount`."""
-    text = _text(value)
-    return None if text is None else _amount(text)
-
-
-def _short_date(value: str | None) -> date | None:
-    """cdealDay/rgstDate의 "26.02.27"(YY.MM.DD) 형식을 date로 바꾼다."""
-    text = _text(value)
-    if text is None:
-        return None
-    year, month, day = text.split(".")
-    return date(2000 + int(year), int(month), int(day))
-
-
-def _road_address(row: dict[str, Any]) -> dict[str, str] | None:
-    """아파트 전월세 전용 도로명 7개 필드를 컬럼 대신 dict 하나로 묶는다(draft.md 1절)."""
-    detail = {field: value for field in ROAD_ADDRESS_FIELDS if (value := _text(row.get(field))) is not None}
-    return detail or None
 
 
 @dataclass(frozen=True)
@@ -225,22 +57,13 @@ class SilverSpec:
     # rtms_raw_items.api_id에 그대로 들어가 있는 슬러그.
     api_id: str
     property_type: PropertyType
-    preprocessor: type[RawTablePreprocessor]
     model: type[Base]
-    # 건물명 필드 이름은 유형마다 다르고, 단독·다가구에는 아예 없다.
-    building_name_field: str | None = None
 
 
-# airflow/dags/rtms/apis.py의 RTMS_APIS와 같아야 한다.
-SPECS = (
-    SilverSpec("apart_sale", PropertyType.APT, SalePreprocessor, SaleTransaction, "aptNm"),
-    SilverSpec("apart_rent", PropertyType.APT, RentPreprocessor, RentTransaction, "aptNm"),
-    SilverSpec("officetel_sale", PropertyType.OFFICETEL, SalePreprocessor, SaleTransaction, "offiNm"),
-    SilverSpec("officetel_rent", PropertyType.OFFICETEL, RentPreprocessor, RentTransaction, "offiNm"),
-    SilverSpec("multiflex_sale", PropertyType.ROW_HOUSE, SalePreprocessor, SaleTransaction, "mhouseNm"),
-    SilverSpec("multiflex_rent", PropertyType.ROW_HOUSE, RentPreprocessor, RentTransaction, "mhouseNm"),
-    SilverSpec("single_multi_family_sale", PropertyType.SINGLE_MULTI, SalePreprocessor, SaleTransaction),
-    SilverSpec("single_multi_family_rent", PropertyType.SINGLE_MULTI, RentPreprocessor, RentTransaction),
+# 유형 목록은 정기 갱신의 RTMS_APIS 하나로 둔다. 건물명 필드 같은 유형별 차이는 preprocess_rtms가 거기서 읽는다.
+SPECS = tuple(
+    SilverSpec(api_id, PropertyType(api.property_type), SaleTransaction if api.is_sale else RentTransaction)
+    for api_id, api in RTMS_APIS.items()
 )
 SPEC_BY_API_ID = {spec.api_id: spec for spec in SPECS}
 
@@ -305,7 +128,6 @@ async def _sigungu_codes(session: AsyncSession, api_id: str, deal_ymd: str) -> l
 
 async def _process_month(spec: SilverSpec, deal_ymd: str, *, dry_run: bool) -> tuple[int, int]:
     """(유형, 계약년월) 하나의 전국 bronze를 정제 표로 옮긴다. 전부 들어가거나 전부 롤백된다."""
-    preprocessor = spec.preprocessor(spec.property_type, spec.api_id, spec.building_name_field)
     bronze = RTMSRawItem.__table__
     silver = spec.model.__table__
     columns = frozenset(column.name for column in silver.columns if column.name not in {"id", "created_at"})
@@ -340,8 +162,8 @@ async def _process_month(spec: SilverSpec, deal_ymd: str, *, dry_run: bool) -> t
                     bronze.c.lawd_cd == lawd_cd,
                 )
             )
-            rows = preprocessor.preprocess(raw_rows.mappings().all())
-            # 전처리기가 리터럴 dict 하나로 모든 행을 만들므로 첫 행만 검사하면 충분하다.
+            rows = [preprocess_rtms(spec.api_id, row["id"], row["payload"]) for row in raw_rows.mappings()]
+            # preprocess_rtms는 API 하나의 모든 행을 같은 키로 만들므로 첫 행만 검사하면 충분하다.
             if rows and rows[0].keys() != columns:
                 raise ValueError(
                     f"정제 row의 키가 {silver.name} 컬럼과 다르다: "

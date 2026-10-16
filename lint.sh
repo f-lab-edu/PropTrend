@@ -47,6 +47,15 @@ if grep -rnE --include="*.py" "^[[:space:]]*(from|import)[[:space:]]+src([[:spac
     echo "DAG는 api의 src를 import하지 않습니다. 필요한 코드는 DAG 쪽으로 옮기세요."
     status=1
 fi
+# scripts/src/process_silver.py는 api 가상환경에서 정기 갱신의 전처리 규칙을 import한다. 이 모듈들이 Airflow를
+# 끌어오면 백필이 실행 시점에야 깨지므로, Airflow가 없는 api 가상환경에서 실제로 import해 본다. 다른 rtms 모듈을
+# 거쳐 간접으로 끌어오는 경우도 grep으로는 못 잡는다. -P는 현재 디렉터리를 import 경로에서 뺀다. 저장소 루트의
+# airflow/ 디렉터리가 이름공간 패키지로 잡혀 `import airflow`가 통과해 버리는 것을 막는다.
+if ! uv run --project api --frozen --no-build python -P -c \
+    "import sys; sys.path.insert(0, 'airflow/dags'); import rtms.apis, rtms.preprocess"; then
+    echo "airflow/dags/rtms의 apis·preprocess는 Airflow 없이 import돼야 합니다. process_silver.py가 api 가상환경에서 씁니다."
+    status=1
+fi
 
 echo "==> pytest"
 # 테스트 실행기는 각 프로젝트의 dev 의존성 그룹에 고정돼 있어 uv.lock이 버전을 정한다.

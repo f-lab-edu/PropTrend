@@ -58,6 +58,8 @@ classmethod-decorators = ["sqlalchemy.orm.declared_attr.directive"]
 [tool.pyright]
 # scripts의 두 배치는 api의 sqlalchemy와 모델을 쓰고 api 가상환경에서 돌므로 여기서 함께 검사한다.
 include = ["src", "tests", "../scripts/src/load_results.py", "../scripts/src/process_silver.py"]
+# process_silver.py가 정기 갱신의 전처리 규칙(rtms 패키지)을 DAG 폴더에서 import한다.
+extraPaths = ["../airflow/dags"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "basic"
