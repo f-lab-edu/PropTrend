@@ -4,6 +4,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from io import BytesIO
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 from urllib.parse import parse_qsl, urlsplit
 
@@ -12,6 +13,7 @@ import requests
 from airflow.dag_processing.dagbag import DagBag
 from airflow.providers.standard.operators.python import PythonOperator
 from airflow.sdk import DAG
+from airflow.sdk.bases.decorator import DecoratedMappedOperator
 from airflow.sdk.exceptions import AirflowSkipException, ParamValidationError
 from requests.adapters import BaseAdapter
 from rtms_daily import (
@@ -43,6 +45,7 @@ API_IDS = [
     "single_multi_family_rent",
 ]
 COLLECT_TASK_IDS = [f"collect_{api_id}" for api_id in API_IDS]
+CHECK_TASK_IDS = [f"check_{api_id}" for api_id in API_IDS]
 PROCESS_TASK_IDS = [f"process_{api_id}" for api_id in API_IDS]
 
 
@@ -66,24 +69,59 @@ def python_task(dag: DAG, task_id: str) -> PythonOperator:
 def test_dag_has_one_collect_task_per_api(dag: DAG) -> None:
     collect_ids = [task_id for task_id in dag.task_ids if task_id.startswith("collect_")]
 
-    # 한도·실패·재시도를 API 경계에서 가르려면 API 하나가 태스크 하나여야 한다.
+    # 한도를 API 경계에서 가르려면 API 하나가 (묶음으로 펼쳐지는) 태스크 하나여야 한다.
     assert sorted(collect_ids) == sorted(COLLECT_TASK_IDS)
 
 
-def test_collect_tasks_run_one_api_each(dag: DAG) -> None:
+def mapped_task(dag: DAG, task_id: str) -> DecoratedMappedOperator:
+    task = dag.get_task(task_id)
+    assert isinstance(task, DecoratedMappedOperator)
+    return task
+
+
+def test_collect_tasks_run_one_api_each_over_chunks(dag: DAG) -> None:
     for api_id, task_id in zip(API_IDS, COLLECT_TASK_IDS, strict=True):
+        task = mapped_task(dag, task_id)
+
         # 같은 함수를 API마다 인자만 바꿔 띄운다. 인자가 어긋나면 다른 API의 bronze를 갈아끼운다.
-        assert tuple(python_task(dag, task_id).op_args) == (api_id,)
+        assert task.partial_kwargs["op_kwargs"] == {"api_id": api_id}
+        # 재시도·실패 표시가 묶음 단위로 갈리도록 묶음 목록으로 펼친다.
+        expand_input = task.op_kwargs_expand_input.value
+        assert isinstance(expand_input, dict)
+        assert expand_input.keys() == {"chunk"}
 
 
 def test_collect_tasks_run_even_if_legal_dong_fails(dag: DAG) -> None:
+    plan = python_task(dag, "plan_rtms_chunks")
+
+    assert plan.upstream_task_ids == {"refresh_legal_dong"}
+    # 법정동코드 교체는 원자적이라 실패해도 어제 목록으로 갱신할 수 있다.
+    assert plan.trigger_rule == "all_done"
     for task_id in COLLECT_TASK_IDS:
+        task = mapped_task(dag, task_id)
+
+        assert task.upstream_task_ids == {"plan_rtms_chunks"}
+        assert task.trigger_rule == "all_done"
+        assert task.partial_kwargs["execution_timeout"] == timedelta(minutes=10)
+
+
+def test_collect_map_index_shows_month_and_sido(dag: DAG) -> None:
+    task = mapped_task(dag, "collect_apart_sale")
+    assert task.map_index_template is not None
+    unmapped = SimpleNamespace(op_kwargs={"api_id": "apart_sale", "chunk": {"deal_ymd": "202610", "sido": "11"}})
+
+    # 템플릿이 틀려도 태스크는 돌고 그리드에 번호만 남으므로 렌더링 결과를 직접 본다.
+    assert dag.get_template_env().from_string(task.map_index_template).render(task=unmapped) == "202610-11"
+
+
+def test_check_tasks_follow_their_own_collect_task(dag: DAG) -> None:
+    for api_id, task_id in zip(API_IDS, CHECK_TASK_IDS, strict=True):
         task = python_task(dag, task_id)
 
-        assert task.upstream_task_ids == {"refresh_legal_dong"}
-        # 법정동코드 교체는 원자적이라 실패해도 어제 목록으로 갱신할 수 있다.
+        assert tuple(task.op_args) == (api_id,)
+        assert task.upstream_task_ids == {f"collect_{api_id}"}
+        # 묶음이 한도로 건너뛰거나 실패해도 받은 응답의 필드는 대조해야 한다.
         assert task.trigger_rule == "all_done"
-        assert task.execution_timeout == timedelta(hours=1)
 
 
 def test_months_param_defaults_to_scheduled_range(dag: DAG) -> None:
@@ -125,7 +163,8 @@ def test_regions_follow_legal_dong_even_if_it_fails(dag: DAG) -> None:
 def test_summarize_waits_for_every_process_task(dag: DAG) -> None:
     summarize = dag.get_task("summarize")
 
-    assert summarize.upstream_task_ids == set(PROCESS_TASK_IDS)
+    # bronze 요약은 check에서 꺼낸다. 정제와 나란히 돌므로 따로 기다려야 한다.
+    assert summarize.upstream_task_ids == {*CHECK_TASK_IDS, *PROCESS_TASK_IDS}
     assert summarize.trigger_rule == "all_done"
 
 
@@ -133,7 +172,7 @@ def test_summarize_keeps_every_api_key(dag: DAG) -> None:
     class FakeTaskInstance:
         def xcom_pull(self, task_ids: str) -> dict[str, int] | None:
             # 성공한 태스크만 반환값이 XCom으로 남는다.
-            return {"units": 500, "failed": 0} if task_ids == "collect_apart_sale" else None
+            return {"units": 500, "failed": 0} if task_ids == "check_apart_sale" else None
 
     result = python_task(dag, "summarize").python_callable(ti=FakeTaskInstance())
 
@@ -150,7 +189,9 @@ def test_watcher_fails_the_run_when_any_task_fails(dag: DAG) -> None:
     assert watcher.upstream_task_ids == {
         "refresh_legal_dong",
         "process_regions",
+        "plan_rtms_chunks",
         *COLLECT_TASK_IDS,
+        *CHECK_TASK_IDS,
         *PROCESS_TASK_IDS,
     }
     assert watcher.trigger_rule == "one_failed"

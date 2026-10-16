@@ -313,7 +313,8 @@ LEGAL_DONG_ROWS_PER_PAGE = 1000  # 1회 요청 최대 건수(초과 시 에러�
 LEGAL_DONG_SUCCESS_PREFIX = "INFO"
 OPEN_API_TIMEOUT = 10
 # 세션이 연결을 재사용하므로, 서버가 유휴 연결을 닫는 순간과 요청이 겹치면 단위 하나가 연결 오류로 실패한다.
-# 실패는 태스크 재시도로 모든 단위를 다시 부르게 하므로 GET을 한 번만 다시 보낸다. HTTP 오류 응답은 다시 보내지 않는다.
+# 실패는 태스크 재시도로 묶음의 모든 단위를 다시 부르게 하므로 GET을 한 번만 다시 보낸다.
+# HTTP 오류 응답은 다시 보내지 않는다.
 OPEN_API_RETRIES = 1
 # 일일 활용건수 초과. 실거래가 API 본문의 결과코드와 공공데이터포털 게이트웨이의 사유 코드가 같은 값이다.
 DAILY_LIMIT_CODE = "22"
@@ -582,6 +583,8 @@ def preprocess_regions(items: list[dict[str, Any]]) -> list[dict[str, str]]:
 RTMS_UNIT_INTERVAL = 0.1
 # 회차 실패 메시지에 실을 좌표 수. 전량은 태스크 로그에 단위마다 남는다.
 FAILED_UNITS_IN_MESSAGE = 20
+# 수집 묶음이 받은 응답 필드를 남기는 XCom 키. 반환값과 달리 건너뜀·실패로 끝난 묶음도 남긴다.
+FIELDS_XCOM_KEY = "fields"
 
 # 아래 컬럼은 api/src/model의 정제 테이블과 같아야 한다. id·created_at은 DB 기본값에 맡긴다.
 TRANSACTION_COMMON_COLUMNS = (
@@ -733,15 +736,13 @@ def upsert_complexes(cursor: Any, property_type: str, rows: list[dict[str, Any]]
     return len(ordered)
 
 
-def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
-    """API 하나의 단위마다 오픈API 응답을 받아 bronze를 갈아끼우고, 응답 필드를 기준선과 대조한다."""
+def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]], seen: set[str]) -> dict[str, int]:
+    """API 하나의 단위마다 오픈API 응답을 받아 bronze를 갈아끼우고, 받은 응답 필드를 seen에 모은다."""
     service_key = get_service_key()
     log.info("%s: bronze %d단위", api_id, len(units))
 
     failed: list[str] = []
     loaded = 0
-    # 단위마다 대조하면 개명 하나에 같은 경고가 단위 수만큼 나가므로 회차 전체의 필드를 모아 한 번에 본다.
-    seen: set[str] = set()
     skipped: AirflowSkipException | None = None
     hook = HttpHook(
         method="GET",
@@ -775,7 +776,7 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
                 # 남은 단위도 전부 같은 응답을 받는다. 받은 단위는 커밋됐으니 남은 것은 다음 실행에 맡긴다.
                 conn.rollback()
                 log.warning("%s: 일일 호출 제한으로 %d단위를 남기고 멈춘다", api_id, len(units) - done)
-                # 바로 던지지 않는다. 그때까지 받은 응답으로도 필드를 대조해야 한다.
+                # 바로 던지지 않는다. 앞서 실패한 단위가 건너뜀에 묻히지 않게 끝에서 가른다.
                 skipped = error
                 break
             except Exception:
@@ -786,40 +787,38 @@ def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
             else:
                 loaded += len(items)
 
-    known = RTMS_APIS[api_id].known_fields
-    missing: frozenset[str] = frozenset()
-    # 받은 item이 없으면 기준선 전 필드가 사라진 것으로 보여 오경보가 난다.
-    if seen:
-        if unknown := seen - known:
-            log.warning("%s: 기준선에 없는 필드가 왔다 %s", api_id, sorted(unknown))
-        # 응답은 값이 비어도 태그는 보내므로, 회차 전체에서 한 번도 안 보인 필드는 개명·삭제다.
-        missing = known - seen
-    # 정리 규칙이 옛 이름으로 값을 찾아 정제 테이블에 빈칸이 쌓인다. 받은 bronze는 커밋됐고 정제는 all_done이라
-    # 그대로 돈다. 재시도해도 같은 응답에 호출 한도만 쓰므로 재시도 없이 실패시켜 DAG 실행을 실패로 드러낸다.
-    drift = AirflowFailException(f"{api_id}: 기준선에 있던 필드가 응답에 없다 {sorted(missing)}") if missing else None
-
     if skipped:
-        # skipped로 끝나면 DAG 실행이 성공으로 보여 앞서 실패한 단위와 필드 누락이 묻힌다.
+        # skipped로 끝나면 DAG 실행이 성공으로 보여 앞서 실패한 단위가 묻힌다.
         if failed:
             # 재시도는 한도가 풀리기 전에 돌아 첫 단위에서 다시 skipped로 끝나므로, 실패 단위를 메우지 못하고
             # 실패만 다시 묻힌다. 재시도 없이 실패시켜 드러낸다.
-            if drift:
-                log.error("%s", drift)
             raise AirflowFailException(
                 f"{api_id}: 일일 호출 제한 전 {len(failed)}/{len(units)}단위 실패 {failed[:FAILED_UNITS_IN_MESSAGE]}"
             )
-        raise drift or skipped
+        raise skipped
 
     summary = {"units": len(units), "succeeded": len(units) - len(failed), "failed": len(failed), "loaded": loaded}
     log.info("%s: bronze 갱신 종료 %s", api_id, summary)
     if failed:
-        # 한 단위라도 실패하면 태스크를 실패시켜 재시도에 맡긴다. 한 API의 단위 수가 호출 한도에 한참
-        # 못 미치고 회차가 짧아, 실패 단위만 고르는 것보다 통째로 다시 도는 편이 단순하다.
-        # 필드 누락보다 앞세워야 재시도가 실패 단위를 메운다. 누락은 재시도에서 다시 걸린다.
+        # 한 단위라도 실패하면 묶음을 실패시켜 재시도에 맡긴다. 묶음이 한 달·한 시도라 다시 부르는 양이 작아,
+        # 실패 단위만 고르는 것보다 묶음째 다시 도는 편이 단순하다.
         raise RuntimeError(f"{api_id}: {len(failed)}/{len(units)}단위 실패 {failed[:FAILED_UNITS_IN_MESSAGE]}")
-    if drift:
-        raise drift
     return summary
+
+
+def check_fields(api_id: str, seen: set[str]) -> None:
+    """회차에서 받은 응답 필드를 API 기준선과 대조한다. 기준선에 있던 필드가 없으면 실패시킨다."""
+    # 받은 item이 없으면 기준선 전 필드가 사라진 것으로 보여 오경보가 난다.
+    if not seen:
+        return
+    known = RTMS_APIS[api_id].known_fields
+    if unknown := seen - known:
+        log.warning("%s: 기준선에 없는 필드가 왔다 %s", api_id, sorted(unknown))
+    # 응답은 값이 비어도 태그는 보내므로, 회차 전체에서 한 번도 안 보인 필드는 개명·삭제다.
+    if missing := known - seen:
+        # 정리 규칙이 옛 이름으로 값을 찾아 정제 테이블에 빈칸이 쌓인다. 받은 bronze는 커밋됐고 정제는 all_done이라
+        # 그대로 돈다. 재시도해도 같은 응답이므로 재시도 없이 실패시켜 DAG 실행을 실패로 드러낸다.
+        raise AirflowFailException(f"{api_id}: 기준선에 있던 필드가 응답에 없다 {sorted(missing)}")
 
 
 def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
@@ -885,8 +884,8 @@ def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
 
 # 신고 기한 30일과 뒤늦은 해제·정정 때문에 지난 달 데이터도 계속 바뀐다. 정기 실행의 갱신 개월 수다.
 RTMS_MONTHS = 2
-# 수동 실행에서 늘릴 수 있는 상한. 2개월 수집이 API당 최대 약 2분(2026-10-15 실측, 시군구 269개)이라
-# 24개월이면 약 24분·API당 약 6,500회로, 수집 태스크의 1시간 제한과 하루 호출 한도(10,000회) 안에 든다.
+# 수동 실행에서 늘릴 수 있는 상한. 24개월이면 API당 약 6,500회(2026-10-15 기준 시군구 269개)로 하루 호출
+# 한도(10,000회) 안에 들고, 묶음은 API당 24 × 시도 16 = 384개로 Airflow의 매핑 상한(max_map_length 1024) 안에 든다.
 MAX_RTMS_MONTHS = 24
 
 # 법정동코드 응답 필드 드리프트 경고의 기준선. RtmsApi.known_fields처럼 여기에만 있다.
@@ -959,15 +958,65 @@ def refresh_legal_dong() -> dict[str, int]:
 
 
 # 법정동코드 교체는 한 트랜잭션이라 실패해도 어제 목록이 남는다. 실거래 갱신을 막을 이유가 없다.
-@task(trigger_rule=TriggerRule.ALL_DONE, execution_timeout=timedelta(hours=1))
-# api_id처럼 DAG에서 넘긴 일반 인자는 앞쪽 위치 인자로 그대로 들어온다.
-def collect_rtms(api_id: str, **context: Any) -> dict[str, int]:
-    """API 하나의 최근 계약년월 × 전 시군구를 받아 단위마다 bronze를 갈아끼운다."""
+@task(trigger_rule=TriggerRule.ALL_DONE, execution_timeout=timedelta(minutes=5))
+def plan_rtms_chunks(**context: Any) -> list[dict[str, Any]]:
+    """이번 회차의 갱신 단위를 (계약년월, 시도) 묶음으로 나눈다."""
+    # 재시도·clear·실패 표시의 단위가 묶음이다. 시군구 하나씩 펼치면 회차당 인스턴스가 수천 개가 되고 매핑
+    # 상한(max_map_length)도 넘긴다. 한 달·한 시도면 재시도가 다시 부르는 양이 최대 수십 단위다.
     hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
-    units = rtms_units(hook, context)
-    # 반환 타입(CompatConnection)이 psycopg2·3 공통 메서드 중 rollback을 빠뜨리고 있다.
-    with closing(cast("Any", hook.get_conn())) as conn:
-        return collect_units(conn, api_id, units)
+    chunks: dict[tuple[str, str], list[str]] = {}
+    # rtms_units가 최신 월부터 주므로 묶음도 최신 월이 앞 map_index를 받는다. 스케줄러는 우선순위가 같으면
+    # map_index 순으로 띄우므로, 중간에 한도로 끊겨도 최근 데이터가 먼저 반영된다.
+    for lawd_cd, deal_ymd in rtms_units(hook, context):
+        chunks.setdefault((deal_ymd, lawd_cd[:2]), []).append(lawd_cd)
+    return [{"deal_ymd": deal_ymd, "sido": sido, "lawd_cds": codes} for (deal_ymd, sido), codes in chunks.items()]
+
+
+@task(
+    trigger_rule=TriggerRule.ALL_DONE,
+    execution_timeout=timedelta(minutes=10),
+    # 그리드에 0, 1, 2 대신 "202610-11"처럼 계약년월-시도로 보여 실패한 묶음을 로그 없이 찾는다.
+    map_index_template="{{ task.op_kwargs['chunk']['deal_ymd'] }}-{{ task.op_kwargs['chunk']['sido'] }}",
+)
+def collect_rtms(api_id: str, chunk: dict[str, Any], **context: Any) -> dict[str, int]:
+    """API 하나의 수집 묶음(계약년월 하나 × 시도 하나의 시군구)을 받아 단위마다 bronze를 갈아끼운다."""
+    hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
+    units = [(lawd_cd, chunk["deal_ymd"]) for lawd_cd in chunk["lawd_cds"]]
+    seen: set[str] = set()
+    try:
+        # 반환 타입(CompatConnection)이 psycopg2·3 공통 메서드 중 rollback을 빠뜨리고 있다.
+        with closing(cast("Any", hook.get_conn())) as conn:
+            return collect_units(conn, api_id, units, seen)
+    finally:
+        # 필드 대조는 회차 전체로 한 번 한다. 묶음마다 대조하면 개명 하나에 같은 실패가 묶음 수만큼 난다.
+        # 반환값은 성공한 묶음만 남으므로, 한도로 건너뛰거나 실패한 묶음이 받은 응답도 넣으려고 따로 남긴다.
+        context["ti"].xcom_push(key=FIELDS_XCOM_KEY, value=sorted(seen))
+
+
+# 묶음이 실패·건너뜀이어도 돈다. 받은 응답만으로도 필드를 대조해야 한도에 걸린 날 개명이 묻히지 않는다.
+@task(trigger_rule=TriggerRule.ALL_DONE, execution_timeout=timedelta(minutes=5))
+def check_rtms(api_id: str, **context: Any) -> dict[str, int]:
+    """API 하나의 수집 묶음 결과를 모으고, 회차에서 받은 응답 필드를 기준선과 대조한다."""
+    ti = context["ti"]
+    # 묶음 목록을 인자로 받으면 묶음 나누기가 실패했을 때 인자 해석 오류가 하나 더 붙는다. 그 실패는 watcher가 드러낸다.
+    chunks = ti.xcom_pull(task_ids="plan_rtms_chunks") or []
+    collect_task_id = f"collect_{api_id}"
+    # map_indexes를 주지 않으면 남은 값이 하나뿐일 때 목록이 아니라 그 값만 돌아와, 필드 목록과 구분되지 않는다.
+    fields = ti.xcom_pull(task_ids=collect_task_id, key=FIELDS_XCOM_KEY, map_indexes=range(len(chunks)))
+    check_fields(api_id, {field for chunk_fields in fields if chunk_fields for field in chunk_fields})
+
+    # 반환값은 성공한 묶음에만 있다. 묶음마다 꺼내면 없는 묶음마다 오류 로그가 남으므로 한 번에 받는다.
+    # 남은 값이 하나뿐이면 목록이 아니라 그 dict만, 하나도 없으면 None이 돌아온다.
+    pulled = ti.xcom_pull(task_ids=collect_task_id)
+    summaries = [pulled] if isinstance(pulled, dict) else [summary for summary in pulled or [] if summary]
+    summary = {
+        "chunks": len(chunks),
+        "succeeded_chunks": len(summaries),
+        "units": sum(summary["units"] for summary in summaries),
+        "loaded": sum(summary["loaded"] for summary in summaries),
+    }
+    log.info("%s: bronze 묶음 집계 %s", api_id, summary)
+    return summary
 
 
 # bronze 수집이 실패·건너뜀이어도 돈다. 정제 테이블은 bronze만의 함수라, 이번에 못 받은 단위는 어제 응답으로
@@ -1023,21 +1072,25 @@ def process_regions() -> dict[str, int]:
     },
 )
 def rtms_daily() -> None:
-    """법정동코드와 지역 목록을 교체하고, API 8종을 따로 bronze에 받아 정제 테이블로 옮긴다."""
+    """법정동코드와 지역 목록을 교체하고, API 8종을 묶음별로 bronze에 받아 정제 테이블로 옮긴다."""
     legal_dong = refresh_legal_dong()
     regions = process_regions()
+    chunks = plan_rtms_chunks()
 
-    legal_dong >> regions
+    legal_dong >> [regions, chunks]
 
     collects = []
+    checks = []
     processes = []
     for api_id in API_IDS:
-        # 같은 API의 수집이 겹치지 않는 것은 max_active_runs=1과 API마다 하나인 수집 태스크로 충분하다.
-        collect = collect_rtms.override(task_id=f"collect_{api_id}")(api_id)
-        # 같은 API의 bronze가 다 받아진 뒤에 돈다.
+        # 묶음끼리는 단위가 겹치지 않고, 회차끼리는 max_active_runs=1로 겹치지 않는다.
+        collect = collect_rtms.override(task_id=f"collect_{api_id}").partial(api_id=api_id).expand(chunk=chunks)
+        check = check_rtms.override(task_id=f"check_{api_id}")(api_id)
+        # 같은 API의 묶음이 다 끝난 뒤에 돈다. 필드 대조를 기다리지 않는다. 누락이 있어도 받은 bronze로 정제한다.
         process = process_rtms.override(task_id=f"process_{api_id}")(api_id)
-        legal_dong >> collect >> process
+        collect >> [check, process]
         collects.append(collect)
+        checks.append(check)
         processes.append(process)
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
@@ -1047,7 +1100,7 @@ def rtms_daily() -> None:
         # 실패·건너뜀이면 XCom이 없다. 사유는 그리드의 태스크 상태가 말한다.
         return {
             api_id: {
-                "bronze": ti.xcom_pull(task_ids=f"collect_{api_id}"),
+                "bronze": ti.xcom_pull(task_ids=f"check_{api_id}"),
                 "silver": ti.xcom_pull(task_ids=f"process_{api_id}"),
             }
             for api_id in API_IDS
@@ -1059,8 +1112,9 @@ def rtms_daily() -> None:
         # DAG 실행 상태는 리프 태스크로 정해진다. summarize가 all_done으로 성공하면 상류 실패가 묻힌다.
         raise RuntimeError("갱신 태스크 중 실패한 것이 있다")
 
-    processes >> summarize()
-    [legal_dong, regions, *collects, *processes] >> watcher()
+    # bronze 요약을 check에서 꺼내므로 정제와 나란히 도는 check도 기다린다.
+    [*checks, *processes] >> summarize()
+    [legal_dong, regions, chunks, *collects, *checks, *processes] >> watcher()
 
 
 rtms_daily()

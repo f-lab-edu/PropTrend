@@ -9,7 +9,7 @@ from contextlib import closing
 from datetime import date
 from pathlib import Path
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 import pendulum
 import psycopg2
@@ -19,6 +19,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from rtms_daily import (
     COMPLEX_COLUMNS,
+    FIELDS_XCOM_KEY,
     PROP_TREND_DB_CONN_ID,
     REGION_COLUMNS,
     RENT_COLUMNS,
@@ -26,7 +27,9 @@ from rtms_daily import (
     RTMS_MONTHS,
     SALE_COLUMNS,
     SALE_INSERT_SQL,
+    check_rtms,
     collect_rtms,
+    plan_rtms_chunks,
     preprocess_rtms,
     process_regions,
     process_units,
@@ -178,21 +181,66 @@ def without(item: dict[str, str], *fields: str) -> dict[str, str]:
     return {key: value for key, value in item.items() if key not in fields}
 
 
-Responses = dict[str, list[dict[str, str]] | Exception]
+Responses = dict[tuple[str, str], list[dict[str, str]] | Exception]
 
 
-def run_collect(conn: Any, monkeypatch: pytest.MonkeyPatch, responses: Responses) -> dict[str, int]:
-    """서울 종로구 하나로 202610·202609 두 단위의 아파트 매매를 받는다. 응답은 계약년월마다 준다."""
-    put_legal_dong(conn, {"region_cd": "1111000000", "locatadd_nm": "서울특별시 종로구"})
+class FakeTaskInstance:
+    """수집 묶음이 남긴 XCom을 map_index별로 담았다가 Airflow처럼 돌려준다."""
+
+    def __init__(self, chunks: list[dict[str, Any]]) -> None:
+        self.chunks = chunks
+        self.map_index = 0
+        self.fields: dict[int, list[str]] = {}
+        self.summaries: dict[int, dict[str, int]] = {}
+
+    def xcom_push(self, key: str, value: list[str]) -> None:
+        assert key == FIELDS_XCOM_KEY
+        self.fields[self.map_index] = value
+
+    def xcom_pull(self, task_ids: str, key: str = "return_value", map_indexes: Any = None) -> Any:
+        if task_ids == "plan_rtms_chunks":
+            return self.chunks
+        if key == FIELDS_XCOM_KEY:
+            return [self.fields.get(map_index) for map_index in map_indexes]
+        # map_indexes 없이 매핑된 태스크를 꺼내면 남은 값이 하나뿐일 때 그 값만, 없으면 None이 온다.
+        summaries = list(self.summaries.values())
+        return summaries[0] if len(summaries) == 1 else summaries or None
+
+
+class CollectRun(NamedTuple):
+    outcomes: list[dict[str, int] | Exception]
+    ti: FakeTaskInstance
+
+
+def run_collect(conn: Any, monkeypatch: pytest.MonkeyPatch, responses: Responses, *lawd_cds: str) -> CollectRun:
+    """주어진 시군구(기본은 종로구)로 202610·202609 묶음의 아파트 매매를 받는다. 응답은 단위마다 준다."""
+    for lawd_cd in lawd_cds or ("11110",):
+        put_legal_dong(conn, {"region_cd": f"{lawd_cd}00000", "locatadd_nm": f"시군구 {lawd_cd}"})
 
     def fetch(session: Any, base_url: str, service_key: str, api_id: str, unit: tuple[str, str]) -> list[Any]:
-        response = responses.get(unit[1], [])
+        response = responses.get(unit, [])
         if isinstance(response, Exception):
             raise response
         return response
 
     monkeypatch.setattr(rtms_daily, "fetch_rtms_items", fetch)
-    return collect_rtms.function("apart_sale", **CONTEXT)
+    chunks = plan_rtms_chunks.function(**CONTEXT)
+    ti = FakeTaskInstance(chunks)
+    outcomes: list[dict[str, int] | Exception] = []
+    for map_index, chunk in enumerate(chunks):
+        ti.map_index = map_index
+        try:
+            summary = collect_rtms.function("apart_sale", chunk, ti=ti, **CONTEXT)
+        except Exception as error:  # noqa: BLE001 - 묶음마다 끝난 상태를 모아 본다.
+            outcomes.append(error)
+        else:
+            ti.summaries[map_index] = summary
+            outcomes.append(summary)
+    return CollectRun(outcomes, ti)
+
+
+def run_check(run: CollectRun) -> dict[str, int]:
+    return check_rtms.function("apart_sale", ti=run.ti)
 
 
 def run_process(api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
@@ -200,114 +248,136 @@ def run_process(api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
         return process_units(task_conn, api_id, units)
 
 
-def test_collect_replaces_only_units_of_this_run(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    put_legal_dong(conn, {"region_cd": "1111000000", "locatadd_nm": "서울특별시 종로구"})
-    put_bronze(conn, "apart_sale", ("11110", "202610"), {"old": "회차 안"})
-    put_bronze(conn, "apart_sale", ("11110", "202608"), {"old": "회차 밖"})
-    put_bronze(conn, "apart_rent", ("11110", "202610"), {"old": "다른 API"})
+OCT, SEP = "202610", "202609"
+SUMMARY_1_UNIT = {"units": 1, "succeeded": 1, "failed": 0, "loaded": 0}
 
+
+def test_collect_replaces_only_units_of_this_run(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    put_bronze(conn, "apart_sale", ("11110", OCT), {"old": "회차 안"})
+    put_bronze(conn, "apart_sale", ("11110", "202608"), {"old": "회차 밖"})
+    put_bronze(conn, "apart_rent", ("11110", OCT), {"old": "다른 API"})
     item = apart_sale_item(dealAmount="1,000", umdNm="청운동")
 
-    def fetch(session: Any, base_url: str, service_key: str, api_id: str, unit: tuple[str, str]) -> list[Any]:
-        return [item] if unit == ("11110", "202610") else []
+    run = run_collect(conn, monkeypatch, {("11110", OCT): [item]})
 
-    monkeypatch.setattr(rtms_daily, "fetch_rtms_items", fetch)
-
-    summary = collect_rtms.function("apart_sale", **CONTEXT)
-
-    assert summary == {"units": 2, "succeeded": 2, "failed": 0, "loaded": 1}
+    assert run.outcomes == [SUMMARY_1_UNIT | {"loaded": 1}, SUMMARY_1_UNIT]
     assert execute(conn, "SELECT api_id, deal_ymd, payload FROM rtms_raw_items ORDER BY api_id, deal_ymd") == [
-        ("apart_rent", "202610", {"old": "다른 API"}),
+        ("apart_rent", OCT, {"old": "다른 API"}),
         ("apart_sale", "202608", {"old": "회차 밖"}),
-        ("apart_sale", "202610", item),
+        ("apart_sale", OCT, item),
     ]
 
 
-def test_months_param_widens_units_from_latest(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    put_legal_dong(conn, {"region_cd": "1111000000", "locatadd_nm": "서울특별시 종로구"})
-    fetched: list[str] = []
+def test_chunks_split_months_and_sido_from_latest(conn: Any) -> None:
+    for region_cd in ("1111000000", "4111000000", "1114000000"):
+        put_legal_dong(conn, {"region_cd": region_cd, "locatadd_nm": "시군구"})
 
-    def fetch(session: Any, base_url: str, service_key: str, api_id: str, unit: tuple[str, str]) -> list[Any]:
-        fetched.append(unit[1])
-        return []
+    chunks = plan_rtms_chunks.function(**CONTEXT | {"params": {"months": 3}})
 
-    monkeypatch.setattr(rtms_daily, "fetch_rtms_items", fetch)
+    # 한도로 끊겨도 최근 데이터가 먼저 반영되도록 늘린 범위도 최신 월이 앞 map_index를 받는다.
+    assert [(chunk["deal_ymd"], chunk["sido"], chunk["lawd_cds"]) for chunk in chunks] == [
+        (OCT, "11", ["11110", "11140"]),
+        (OCT, "41", ["41110"]),
+        (SEP, "11", ["11110", "11140"]),
+        (SEP, "41", ["41110"]),
+        ("202608", "11", ["11110", "11140"]),
+        ("202608", "41", ["41110"]),
+    ]
 
-    collect_rtms.function("apart_sale", **CONTEXT | {"params": {"months": 3}})
 
-    # 한도로 끊겨도 최근 데이터가 먼저 반영되도록 늘린 범위도 최신 월부터 돈다.
-    assert fetched == ["202610", "202609", "202608"]
+def test_check_sums_summaries_of_succeeded_chunks(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    responses: Responses = {("11110", OCT): [apart_sale_item()], ("11110", SEP): AirflowSkipException("한도")}
+
+    # 실패·건너뜀인 묶음은 반환값이 없다. 남은 값이 하나뿐이어도 목록처럼 모아야 한다.
+    assert run_check(run_collect(conn, monkeypatch, responses)) == {
+        "chunks": 2,
+        "succeeded_chunks": 1,
+        "units": 1,
+        "loaded": 1,
+    }
 
 
 def test_unknown_field_only_warns(conn: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture) -> None:
-    summary = run_collect(conn, monkeypatch, {"202610": [apart_sale_item(newField="1")]})
+    run = run_collect(conn, monkeypatch, {("11110", OCT): [apart_sale_item(newField="1")]})
 
     # 새 필드는 잃는 값이 없으므로 태스크를 막지 않는다.
-    assert summary == {"units": 2, "succeeded": 2, "failed": 0, "loaded": 1}
+    assert run_check(run)["loaded"] == 1
     assert "기준선에 없는 필드가 왔다 ['newField']" in caplog.text
 
 
 def test_missing_field_fails_without_retry_after_storing_bronze(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     renamed = without(apart_sale_item(), "aptSeq") | {"aptSeqNo": "11110-1"}
+    run = run_collect(conn, monkeypatch, {("11110", OCT): [renamed]})
 
-    with pytest.raises(AirflowFailException, match=r"\['aptSeq'\]"):
-        run_collect(conn, monkeypatch, {"202610": [renamed]})
-
-    # 받은 응답은 커밋돼 정제가 그대로 돌 수 있다.
+    # 수집 묶음은 성공으로 끝나고 받은 응답은 커밋돼 정제가 그대로 돌 수 있다. 실패는 대조 태스크가 낸다.
+    assert run.outcomes == [SUMMARY_1_UNIT | {"loaded": 1}, SUMMARY_1_UNIT]
     assert execute(conn, "SELECT count(*) FROM rtms_raw_items") == [(1,)]
+    with pytest.raises(AirflowFailException, match=r"\['aptSeq'\]"):
+        run_check(run)
 
 
-def test_field_seen_in_any_unit_is_not_missing(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    # 단위 하나에 없더라도 회차 전체에서 한 번이라도 보이면 개명·삭제가 아니다.
+def test_field_seen_in_any_chunk_is_not_missing(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 묶음 하나에 없더라도 회차 전체에서 한 번이라도 보이면 개명·삭제가 아니다.
     responses: Responses = {
-        "202610": [without(apart_sale_item(), "aptSeq")],
-        "202609": [without(apart_sale_item(), "aptDong")],
+        ("11110", OCT): [without(apart_sale_item(), "aptSeq")],
+        ("11110", SEP): [without(apart_sale_item(), "aptDong")],
     }
 
-    assert run_collect(conn, monkeypatch, responses)["loaded"] == 2
+    assert run_check(run_collect(conn, monkeypatch, responses))["loaded"] == 2
 
 
 def test_empty_responses_skip_field_check(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     # 거래 없는 달만 있으면 기준선 전 필드가 사라진 것처럼 보인다.
-    assert run_collect(conn, monkeypatch, {})["loaded"] == 0
+    assert run_check(run_collect(conn, monkeypatch, {}))["loaded"] == 0
 
 
-def test_daily_limit_skips_after_checking_received_units(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    with pytest.raises(AirflowSkipException):
-        run_collect(conn, monkeypatch, {"202610": [apart_sale_item()], "202609": AirflowSkipException("한도")})
+def test_daily_limit_skips_chunk_after_storing_received_units(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    responses: Responses = {("11110", OCT): [apart_sale_item()], ("11140", OCT): AirflowSkipException("한도")}
+
+    run = run_collect(conn, monkeypatch, responses, "11110", "11140")
+
+    assert isinstance(run.outcomes[0], AirflowSkipException)
+    assert execute(conn, "SELECT lawd_cd FROM rtms_raw_items") == [("11110",)]
 
 
 def test_daily_limit_does_not_hide_missing_field(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     responses: Responses = {
-        "202610": [without(apart_sale_item(), "aptSeq")],
-        "202609": AirflowSkipException("한도"),
+        ("11110", OCT): [without(apart_sale_item(), "aptSeq")],
+        ("11140", OCT): AirflowSkipException("한도"),
     }
 
-    # skipped로 끝나면 DAG 실행이 성공으로 보여 누락이 묻힌다.
+    run = run_collect(conn, monkeypatch, responses, "11110", "11140")
+
+    # 건너뛴 묶음은 반환값이 없지만, 한도 전에 받은 응답의 필드도 대조에 들어가야 누락이 묻히지 않는다.
+    assert isinstance(run.outcomes[0], AirflowSkipException)
     with pytest.raises(AirflowFailException, match="aptSeq"):
-        run_collect(conn, monkeypatch, responses)
+        run_check(run)
 
 
 def test_daily_limit_does_not_hide_failed_unit(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
-    responses: Responses = {
-        "202610": RuntimeError("일시 오류"),
-        "202609": AirflowSkipException("한도"),
-    }
+    responses: Responses = {("11110", OCT): RuntimeError("일시 오류"), ("11140", OCT): AirflowSkipException("한도")}
+
+    run = run_collect(conn, monkeypatch, responses, "11110", "11140")
 
     # 재시도는 한도가 풀리기 전에 돌아 skipped로 끝나므로, 재시도 없는 실패로 끝나야 DAG 실행에 드러난다.
-    with pytest.raises(AirflowFailException, match="1/2단위 실패"):
-        run_collect(conn, monkeypatch, responses)
+    assert isinstance(run.outcomes[0], AirflowFailException)
+    assert "1/2단위 실패" in str(run.outcomes[0])
 
 
-def test_failed_unit_retries_before_missing_field_fails(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_failed_unit_retries_chunk_even_with_missing_field(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
     responses: Responses = {
-        "202610": [without(apart_sale_item(), "aptSeq")],
-        "202609": RuntimeError("일시 오류"),
+        ("11110", OCT): [without(apart_sale_item(), "aptSeq")],
+        ("11140", OCT): RuntimeError("일시 오류"),
     }
 
-    # 재시도 없는 실패로 끝내면 일시 오류로 못 받은 단위가 메워지지 않는다.
-    with pytest.raises(RuntimeError, match="1/2단위 실패"):
-        run_collect(conn, monkeypatch, responses)
+    run = run_collect(conn, monkeypatch, responses, "11110", "11140")
+
+    # 묶음은 재시도할 수 있는 실패로 끝나야 일시 오류로 못 받은 단위가 메워진다. 누락은 대조 태스크가 따로 낸다.
+    failure = run.outcomes[0]
+    assert type(failure) is RuntimeError
+    assert "1/2단위 실패" in str(failure)
+    with pytest.raises(AirflowFailException, match="aptSeq"):
+        run_check(run)
 
 
 @pytest.mark.parametrize(
