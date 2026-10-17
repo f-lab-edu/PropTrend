@@ -7,7 +7,6 @@ requires-python = ">=3.14"
 dependencies = [
     "argon2-cffi>=25.1.0",
     "asyncpg>=0.31.0",
-    "defusedxml>=0.7.1",
     "email-validator>=2.3.0",
     "fastapi>=0.141.1",
     "httpx>=0.28.1",
@@ -59,6 +58,8 @@ classmethod-decorators = ["sqlalchemy.orm.declared_attr.directive"]
 [tool.pyright]
 # scripts의 두 배치는 api의 sqlalchemy와 모델을 쓰고 api 가상환경에서 돌므로 여기서 함께 검사한다.
 include = ["src", "tests", "../scripts/src/load_results.py", "../scripts/src/process_silver.py"]
+# process_silver.py가 정기 갱신의 전처리 규칙(rtms 패키지)을 DAG 폴더에서 import한다.
+extraPaths = ["../airflow/dags"]
 venvPath = "."
 venv = ".venv"
 typeCheckingMode = "basic"
@@ -72,7 +73,7 @@ dev = [
 ]
 
 [tool.pytest.ini_options]
-# 테스트는 api/에서 돌지만 임포트는 src.jobs...이므로 프로젝트 루트를 경로에 넣는다.
+# 테스트는 api/에서 돌지만 임포트는 src....이므로 프로젝트 루트를 경로에 넣는다.
 pythonpath = ["."]
 testpaths = ["tests"]
 asyncio_mode = "auto"

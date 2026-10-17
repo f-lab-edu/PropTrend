@@ -1,11 +1,13 @@
 """bronze 표(rtms_raw_items)에 쌓인 실거래가 전량을 정제 표로 옮기는 일회성 배치.
 
-load_results.py로 bronze 백필을 마친 뒤 한 번 돌린다. 갱신 파이프라인의 정제 단계(process_unit)를
+load_results.py로 bronze 백필을 마친 뒤 한 번 돌린다. 정기 갱신(airflow/dags/rtms_daily.py)의 정제 단계를
 (유형, 계약년월) 전국 단위로 넓혀 돌린다. 오픈API는 부르지 않는다.
 
-load_results.py와 달리 api 프로젝트의 전처리기·정리기·적재기를 그대로 import한다. bronze 적재는
-payload를 가공 없이 넣을 뿐이라 DDL만 맞추면 되지만, 정제는 변환 규칙 자체가 계약이다. 규칙을
-두 벌로 두면 백필한 달과 파이프라인이 갱신한 달의 값이 조용히 어긋난다.
+전처리 규칙과 유형 목록은 정기 갱신의 것(airflow/dags/rtms/preprocess.py, rtms/apis.py)을 그대로 import한다.
+두 벌로 두면 한쪽만 고쳤을 때 백필한 달과 정기 갱신이 다시 만든 달의 값이 조용히 달라진다. 두 모듈은 표준
+라이브러리만 써서 Airflow가 없는 api 가상환경에서도 import된다(lint.sh가 확인한다).
+
+같은 달을 동시에 지우고 넣으면 한쪽 결과가 중복되거나 사라지므로, rtms_daily DAG를 일시정지한 뒤 돌린다.
 
     uv run --project api python scripts/src/process_silver.py
 """
@@ -16,32 +18,54 @@ import logging
 import re
 import sys
 import time
+from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
+from typing import Any, cast
 
 from dotenv import load_dotenv
-from sqlalchemy import delete, select
+from sqlalchemy import CursorResult, delete, insert, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "api"))
+# DAG 폴더를 올려 정기 갱신의 rtms 패키지를 import한다. Airflow가 DAG 파일을 읽을 때와 같은 기준 경로다.
+sys.path.insert(0, str(REPO_ROOT / "airflow" / "dags"))
 
 # uv run --project api는 api/.env를 자동으로 읽지 않는다. 명시적으로 읽지 않으면
 # DATABASE_URL이 src/db.py의 기본값으로 조용히 폴백한다.
 load_dotenv(REPO_ROOT / "api" / ".env")
 
-# api 프로젝트를 import 경로에 올린 뒤에야 아래 모듈들을 불러올 수 있다.
+# api 프로젝트와 DAG 폴더를 import 경로에 올린 뒤에야 아래 모듈들을 불러올 수 있다.
+from rtms.apis import RTMS_APIS  # noqa: E402
+from rtms.preprocess import preprocess_rtms  # noqa: E402
 from src.db import create_tables, dispose_engine, session_scope  # noqa: E402
-from src.jobs.collector import RTMSRawItemCollector  # noqa: E402
-from src.jobs.lock import advisory_lock  # noqa: E402
-from src.jobs.pipeline import PIPELINES, SPEC_BY_API_ID, PipelineSpec  # noqa: E402
-from src.model import RefreshUnitState, RTMSRawItem, UnitStatus  # noqa: E402
+from src.model import Base, PropertyType, RentTransaction, RTMSRawItem, SaleTransaction  # noqa: E402
 
 logger = logging.getLogger("process_silver")
 
 YYYYMM_PATTERN = re.compile(r"^\d{6}$")
 
-# 갱신 파이프라인이 돌고 있어 시작하지 않았다. 실패(1)와 구분해 다시 돌리면 된다는 뜻이다.
-EXIT_LOCK_BUSY = 2
+DECEMBER = 12
+CHUNK_SIZE = 1000
+
+
+@dataclass(frozen=True)
+class SilverSpec:
+    """실거래가 API 하나를 정제 표로 옮기는 설정을 묶는다."""
+
+    # rtms_raw_items.api_id에 그대로 들어가 있는 슬러그.
+    api_id: str
+    property_type: PropertyType
+    model: type[Base]
+
+
+# 유형 목록은 정기 갱신의 RTMS_APIS 하나로 둔다. 건물명 필드 같은 유형별 차이는 preprocess_rtms가 거기서 읽는다.
+SPECS = tuple(
+    SilverSpec(api_id, PropertyType(api.property_type), SaleTransaction if api.is_sale else RentTransaction)
+    for api_id, api in RTMS_APIS.items()
+)
+SPEC_BY_API_ID = {spec.api_id: spec for spec in SPECS}
 
 
 def _yyyymm(value: str) -> str:
@@ -69,9 +93,9 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-async def _planned_months(specs: list[PipelineSpec], args: argparse.Namespace) -> dict[str, list[str]]:
+async def _planned_months(specs: list[SilverSpec], args: argparse.Namespace) -> dict[str, list[str]]:
     """bronze에 행이 있는 (api_id, deal_ymd)를 API별 월 오름차순으로 모은다."""
-    # 파일이 아니라 bronze를 본다. 갱신 파이프라인이 채운 달도 이 표에 함께 있다.
+    # 파일이 아니라 bronze를 본다. 정기 갱신이 채운 달도 이 표에 함께 있다.
     table = RTMSRawItem.__table__
     statement = (
         select(table.c.api_id, table.c.deal_ymd).where(table.c.api_id.in_([spec.api_id for spec in specs])).distinct()
@@ -102,42 +126,58 @@ async def _sigungu_codes(session: AsyncSession, api_id: str, deal_ymd: str) -> l
     return list(result.scalars())
 
 
-async def _clear_collected(session: AsyncSession, api_id: str, deal_ymd: str) -> None:
-    """그 달의 '정제 미완' 기록을 지운다. 정제 표가 방금 bronze와 맞춰졌기 때문이다."""
-    # FAILED는 bronze부터 커밋되지 않은 단위라 정제로는 풀리지 않는다. 수집 재시도 몫으로 남긴다.
-    table = RefreshUnitState.__table__
-    await session.execute(
-        delete(table).where(
-            table.c.api_id == api_id,
-            table.c.deal_ymd == deal_ymd,
-            table.c.status == UnitStatus.COLLECTED,
-        )
-    )
-
-
-async def _process_month(spec: PipelineSpec, deal_ymd: str, *, dry_run: bool) -> tuple[int, int]:
+async def _process_month(spec: SilverSpec, deal_ymd: str, *, dry_run: bool) -> tuple[int, int]:
     """(유형, 계약년월) 하나의 전국 bronze를 정제 표로 옮긴다. 전부 들어가거나 전부 롤백된다."""
-    preprocessor = spec.build_preprocessor()
-    async with session_scope() as session:
-        # 시군구를 생략한 전국 삭제다. bronze에 없는 시군구의 정제 행까지 지워야
-        # 이 달의 정제 표가 bronze만으로 다시 만든 결과와 같아진다.
-        deleted = 0 if dry_run else await spec.cleaner(session).clean(spec.property_type, deal_ymd)
+    bronze = RTMSRawItem.__table__
+    silver = spec.model.__table__
+    columns = frozenset(column.name for column in silver.columns if column.name not in {"id", "created_at"})
+    year, month = int(deal_ymd[:4]), int(deal_ymd[4:])
+    start = date(year, month, 1)
+    end = date(year + 1, 1, 1) if month == DECEMBER else date(year, month + 1, 1)
 
-        collector = RTMSRawItemCollector(session, spec.api_id)
-        loader = spec.loader(session)
+    async with session_scope() as session:
+        deleted = 0
+        if not dry_run:
+            # 시군구를 생략한 전국 삭제다. bronze에 없는 시군구의 정제 행까지 지워야
+            # 이 달의 정제 표가 bronze만으로 다시 만든 결과와 같아진다.
+            result = await session.execute(
+                delete(silver).where(
+                    silver.c.property_type == spec.property_type,
+                    silver.c.deal_date >= start,
+                    silver.c.deal_date < end,
+                )
+            )
+            deleted = cast(CursorResult[Any], result).rowcount
+
         loaded = 0
         # 전국 한 달치(아파트 전월세는 수십만 행)를 한 번에 읽으면 메모리가 버티지 못한다.
-        # 파이프라인과 같은 시군구 단위로 끊어 읽되, 트랜잭션은 달 하나로 묶는다.
+        # 정기 갱신과 같은 시군구 단위로 끊어 읽되, 트랜잭션은 달 하나로 묶는다.
         for lawd_cd in await _sigungu_codes(session, spec.api_id, deal_ymd):
-            payload = preprocessor.preprocess(await collector.collect(deal_ymd, lawd_cd))
-            loaded += len(payload) if dry_run else await loader.load(payload)
-
-        if not dry_run:
-            await _clear_collected(session, spec.api_id, deal_ymd)
+            # payload를 펼치지 않고 그대로 넘긴다. 전처리기가 오류 행을 짚으려면 bronze id가
+            # payload 밖에 따로 있어야 한다.
+            raw_rows = await session.execute(
+                select(bronze.c.id, bronze.c.payload).where(
+                    bronze.c.api_id == spec.api_id,
+                    bronze.c.deal_ymd == deal_ymd,
+                    bronze.c.lawd_cd == lawd_cd,
+                )
+            )
+            rows = [preprocess_rtms(spec.api_id, row["id"], row["payload"]) for row in raw_rows.mappings()]
+            # preprocess_rtms는 API 하나의 모든 행을 같은 키로 만들므로 첫 행만 검사하면 충분하다.
+            if rows and rows[0].keys() != columns:
+                raise ValueError(
+                    f"정제 row의 키가 {silver.name} 컬럼과 다르다: "
+                    f"모르는 키={sorted(rows[0].keys() - columns)}, 빠진 키={sorted(columns - rows[0].keys())}"
+                )
+            if not dry_run:
+                # 모델이 아니라 Table을 넘긴다. 모델을 넘기면 ORM 경로를 타서 느리다.
+                for chunk_start in range(0, len(rows), CHUNK_SIZE):
+                    await session.execute(insert(silver), rows[chunk_start : chunk_start + CHUNK_SIZE])
+            loaded += len(rows)
     return deleted, loaded
 
 
-async def _process_spec(spec: PipelineSpec, months: list[str], *, dry_run: bool, failures: list[str]) -> int:
+async def _process_spec(spec: SilverSpec, months: list[str], *, dry_run: bool, failures: list[str]) -> int:
     spec_rows = 0
     for deal_ymd in months:
         key = f"{spec.api_id}/{deal_ymd}"
@@ -167,7 +207,10 @@ async def _process_spec(spec: PipelineSpec, months: list[str], *, dry_run: bool,
     return spec_rows
 
 
-async def _process_all(specs: list[PipelineSpec], args: argparse.Namespace) -> int:
+async def run() -> int:
+    args = _parse_args()
+    specs = [spec for spec in SPECS if not args.api_ids or spec.api_id in args.api_ids]
+
     if not args.dry_run:
         # 정제 표는 API 서버가 기동하면서 만든다. 서버를 띄운 적 없는 DB에서도 돌도록 확인만 한다.
         await create_tables()
@@ -186,21 +229,6 @@ async def _process_all(specs: list[PipelineSpec], args: argparse.Namespace) -> i
         logger.error("실패한 달 %d건: %s", len(failures), ", ".join(failures))
         logger.error("달마다 지우고 다시 넣으므로 --api/--from/--to로 그 달만 다시 돌리면 됩니다")
     return 1 if failures else 0
-
-
-async def run() -> int:
-    args = _parse_args()
-    specs = [spec for spec in PIPELINES if not args.api_ids or spec.api_id in args.api_ids]
-
-    if args.dry_run:
-        return await _process_all(specs, args)
-
-    # 갱신 파이프라인과 같은 락을 잡는다. 같은 달을 동시에 지우고 넣으면 한쪽 결과가 중복되거나 사라진다.
-    async with advisory_lock() as acquired:
-        if not acquired:
-            logger.error("갱신 파이프라인이 돌고 있어 시작하지 않습니다. 끝난 뒤 다시 실행하세요")
-            return EXIT_LOCK_BUSY
-        return await _process_all(specs, args)
 
 
 async def main() -> int:

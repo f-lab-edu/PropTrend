@@ -1,6 +1,5 @@
 """API 테스트가 함께 쓰는 클라이언트, 테스트 DB 세션, 시드 데이터 삽입 함수."""
 
-import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any
@@ -8,18 +7,13 @@ from typing import Any
 import httpx
 import pytest
 import pytest_asyncio
-from sqlalchemy import delete, insert, inspect, make_url, text, tuple_
-from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker, create_async_engine
+from sqlalchemy import delete, insert, inspect, tuple_
+from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, async_sessionmaker
 
 from src.dependencies import get_session
 from src.main import app
 from src.model import Base
 from src.services import prop_transaction as prop_transaction_service
-
-# 실데이터가 든 prop_trend와 분리한다. 테이블을 지우고 다시 만들기 때문에 이름이 _test로 끝나야만 쓴다.
-TEST_DATABASE_URL = os.environ.get(
-    "TEST_DATABASE_URL", "postgresql+asyncpg://postgres:postgres@localhost:5432/prop_trend_test"
-)
 
 
 @asynccontextmanager
@@ -38,29 +32,6 @@ async def seed_rows[ModelT: Base](
         keys = [mapper.primary_key_from_instance(row) for row in inserted]
         async with session_factory() as session, session.begin():
             await session.execute(delete(model).where(tuple_(*mapper.primary_key).in_(keys)))
-
-
-@pytest_asyncio.fixture(scope="session", loop_scope="session")
-async def test_engine() -> AsyncIterator[AsyncEngine]:
-    """테스트 DB가 없으면 만들고, 현재 모델 기준으로 테이블을 다시 만든 엔진."""
-    url = make_url(TEST_DATABASE_URL)
-    if not url.database or not url.database.endswith("_test"):
-        raise RuntimeError(f"테스트 DB 이름은 _test로 끝나야 합니다: {url.database}")
-
-    admin_engine = create_async_engine(url.set(database="postgres"), isolation_level="AUTOCOMMIT")
-    async with admin_engine.connect() as conn:
-        exists = await conn.scalar(text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": url.database})
-        if not exists:
-            await conn.execute(text(f'CREATE DATABASE "{url.database}"'))
-    await admin_engine.dispose()
-
-    engine = create_async_engine(url)
-    # create_all은 이미 있는 테이블을 고치지 않으므로 모델이 바뀌어도 맞도록 지우고 다시 만든다.
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-    yield engine
-    await engine.dispose()
 
 
 @pytest_asyncio.fixture(scope="session", loop_scope="session")

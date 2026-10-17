@@ -54,6 +54,7 @@ jobs:
         run: |
           uv sync --project api --frozen --no-build
           uv sync --project scripts --frozen --no-build
+          uv sync --project airflow --frozen --no-build
 
       - name: Run lint.sh
         run: ./lint.sh

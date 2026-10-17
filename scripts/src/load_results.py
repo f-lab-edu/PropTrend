@@ -64,8 +64,8 @@ CHUNK_SIZE = 1000
 # 충돌 단위를 몇 개까지 나열할지. 전부 찍으면 수백 줄이 나와 안내 문구가 묻힌다.
 CONFLICT_SAMPLE = 10
 
-# 결과 디렉터리 이름이자 rtms_raw_items.api_id에 그대로 들어가는 슬러그. api 쪽
-# RTMS_KNOWN_FIELDS의 키와 같은 어휘여야 한다. 다르면 갱신 파이프라인의 단위 삭제가
+# 결과 디렉터리 이름이자 rtms_raw_items.api_id에 그대로 들어가는 슬러그. airflow/dags/rtms/apis.py의
+# RTMS_APIS 키와 같은 어휘여야 한다. 다르면 갱신 파이프라인의 단위 삭제가
 # 이 스크립트가 넣은 행을 영영 못 찾아 매일 중복을 쌓는다.
 # legal_dong_code는 여기 없다. 표와 갱신 방식이 달라 _ingest_legal_dong_code가 따로 맡는다.
 API_IDS = (
@@ -246,7 +246,7 @@ async def _insert_chunked(conn: AsyncConnection, table: Table, rows: list[dict[s
 def _is_sigungu(row: dict[str, Any]) -> bool:
     """시군구 단위(SSGGG00000) 행인지 판별한다.
 
-    api/src/jobs/collector.py의 LegalDongCodeCollector._is_sigungu와 같은 규칙이다. 갱신
+    airflow/dags/rtms/open_api.py의 fetch_legal_dong_rows와 같은 규칙이다. 갱신
     파이프라인이 이 표에 시군구 행만 넣고 sigungu_codes()가 그것을 LAWD_CD 목록으로 읽으므로,
     원본 파일에 함께 들어 있는 읍면동·리까지 넣으면 다음 수집이 없는 지역을 긁는다.
     """
@@ -257,7 +257,7 @@ async def _ingest_legal_dong_code(*, dry_run: bool) -> int:
     """법정동코드 bronze 표를 통째로 갈아끼운다.
 
     월 단위가 없어 진행 기록에 얹히지 않는 대신 늘 비우고 다시 채운다. 몇 번을 돌려도 결과가
-    같아 이어갈 지점이 필요 없다. api/src/jobs/pipeline.py의 refresh_legal_dong_codes와 같다.
+    같아 이어갈 지점이 필요 없다. airflow/dags/rtms/tasks.py의 refresh_legal_dong 태스크와 같다.
     """
     if not LEGAL_DONG_CODE_PATH.is_file():
         logger.warning("법정동코드 원본이 없습니다. 건너뜁니다: %s", LEGAL_DONG_CODE_PATH)

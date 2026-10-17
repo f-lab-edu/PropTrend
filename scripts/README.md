@@ -98,13 +98,13 @@ ERROR 그대로 적재하면 같은 달을 두 번 넣어 행이 통째로 중�
 
 `legal_dong_code`는 월 단위가 없어 `(api_id, yyyymm)` 진행 기록에 얹히지 않는다. 대신
 `legal_dong_code_raw_items`를 **통째로 비우고 다시 채운다.** 몇 번을 돌려도 결과가 같아
-이어갈 지점이 필요 없고, 비우기와 채우기는 한 트랜잭션이다. `api/src/jobs/pipeline.py`의
-`refresh_legal_dong_codes`와 같은 방식이며, 실거래가보다 먼저 적재한다.
+이어갈 지점이 필요 없고, 비우기와 채우기는 한 트랜잭션이다. `airflow/dags/rtms/tasks.py`의
+`refresh_legal_dong` 태스크와 같은 방식이며, 실거래가보다 먼저 적재한다.
 
 원본 파일에는 읍면동·리까지 20,000행 넘게 들어 있지만 **표에는 시군구 행만 넣는다.**
 갱신 파이프라인이 그렇게 채우고 `sigungu_codes()`가 이 표를 `LAWD_CD` 목록으로 읽으므로,
 하위 행까지 넣으면 다음 수집이 존재하지 않는 지역을 긁는다. 판별 규칙은
-`api/src/jobs/collector.py`의 `_is_sigungu`와 같다.
+`airflow/dags/rtms/open_api.py`의 `fetch_legal_dong_rows`와 같다.
 
 원본 파일이 없으면 경고만 남기고 건너뛴다. 시군구 행이 하나도 없으면 표를 비우지 않고
 실패시킨다. 빈 목록으로 갈아끼우면 이후 모든 수집이 시군구 목록을 잃기 때문이다.

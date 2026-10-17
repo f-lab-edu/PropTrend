@@ -1,0 +1,42 @@
+[project]
+name = "prop-trend-airflow"
+version = "0.1.0"
+description = "갱신 파이프라인을 조율하는 Airflow DAG"
+requires-python = ">=3.14"
+# Dockerfile의 apache/airflow 이미지에 든 버전과 맞춘다. DAG 테스트가 런타임과 다른 연산자를 보면 안 된다.
+dependencies = [
+    "apache-airflow==3.3.2",
+    "apache-airflow-providers-http==6.1.0",
+    "apache-airflow-providers-postgres==7.0.2",
+    # 아래는 이미지에 없거나 Airflow가 간접으로만 끌어오는 것이다. 이미지에 설치하는 버전(Dockerfile)과 맞춘다.
+    "defusedxml==0.7.1",
+    "requests==2.34.2",
+    "requests-toolbelt==1.0.0",
+]
+
+[tool.ruff]
+# 룰은 api와 같이 둔다. 여기에 따로 적으면 두 벌이 조용히 어긋난다.
+extend = "../api/pyproject.toml"
+
+[tool.ruff.lint.per-file-ignores]
+# 테스트는 assert로 단언하고 기대값을 리터럴로 적는다.
+"tests/**" = ["S101", "PLR2004"]
+
+[tool.pyright]
+include = ["dags", "tests"]
+# 테스트가 DAG 모듈의 함수를 직접 import한다.
+extraPaths = ["dags"]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+# Airflow는 의존 관계를 `a >> b`로 선언한다. 값을 버리는 것이 정상인 관용구다.
+reportUnusedExpression = false
+
+[dependency-groups]
+dev = [
+    "pyright>=1.1.414",
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

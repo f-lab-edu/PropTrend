@@ -49,7 +49,7 @@ def row_to_dict(row: ET.Element) -> dict[str, str]:
 def is_sigungu(row: dict[str, str]) -> bool:
     """시군구 단위(SSGGG00000) 행인지 판별한다.
 
-    api/src/jobs/collector.py의 LegalDongCodeCollector._is_sigungu와 같은 규칙이다.
+    airflow/dags/rtms/open_api.py의 fetch_legal_dong_rows와 같은 규칙이다.
     """
     return row.get("sgg_cd") != "000" and row.get("umd_cd") == "000" and row.get("ri_cd") == "00"
 

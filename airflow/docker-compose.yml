@@ -1,0 +1,97 @@
+# 갱신 파이프라인을 조율하는 Airflow 스택. 서비스 스택(루트 docker-compose.yml)과 따로 올리고 내린다.
+#
+#   docker compose -f airflow/docker-compose.yml up -d --build
+#
+# 스케줄러는 루트 스택의 네트워크(prop_trend_default)에 붙어 서비스 DB에 닿는다. 루트 스택이 먼저 떠 있어야 한다.
+name: prop-trend-airflow
+
+x-airflow-common: &airflow-common
+  # 공식 이미지에 태스크용 패키지를 더한 것이다. Airflow 버전은 Dockerfile의 FROM이 정한다.
+  build: .
+  image: prop-trend-airflow:latest
+  environment: &airflow-env
+    AIRFLOW__CORE__EXECUTOR: LocalExecutor
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:${AIRFLOW_METADB_PASSWORD:?airflow/.env에 AIRFLOW_METADB_PASSWORD를 넣어야 합니다}@airflow-metadb:5432/airflow
+    AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+    AIRFLOW__CORE__DEFAULT_TIMEZONE: Asia/Seoul
+    # 태스크는 스케줄러 컨테이너 안에서 돌고 Execution API로 상태를 보고한다.
+    AIRFLOW__CORE__EXECUTION_API_SERVER_URL: http://airflow-apiserver:8080/execution/
+    # 컴포넌트마다 따로 만들면 스케줄러가 발급한 태스크 토큰을 api-server가 거부한다.
+    AIRFLOW__API_AUTH__JWT_SECRET: ${AIRFLOW_JWT_SECRET:?airflow/.env에 AIRFLOW_JWT_SECRET을 넣어야 합니다}
+    # 로컬 전용 구성이다. 포트를 127.0.0.1에만 열고 로그인을 생략한다.
+    AIRFLOW__CORE__SIMPLE_AUTH_MANAGER_ALL_ADMINS: "True"
+    # 태스크가 읽는 Connection. 환경변수로만 두면 메타 DB와 UI 편집 경로에 비밀값이 남지 않는다.
+    AIRFLOW_CONN_PROP_TREND_DB: ${PROP_TREND_DB_CONN:-postgresql://postgres:postgres@postgres:5432/prop_trend}
+    # 인증키를 password에 둬야 태스크 로그에서 가려진다. 키에 /·+·=가 있어 URI가 아닌 JSON 형식을 쓴다.
+    AIRFLOW_CONN_DATA_GO_KR: '{"conn_type": "http", "host": "https://apis.data.go.kr", "password": "${DATA_GO_KR_SERVICE_KEY:?airflow/.env에 DATA_GO_KR_SERVICE_KEY를 넣어야 합니다}"}'
+  volumes:
+    - ./dags:/opt/airflow/dags:ro
+    - airflow-logs:/opt/airflow/logs
+  depends_on: &airflow-depends-on
+    airflow-metadb:
+      condition: service_healthy
+    airflow-init:
+      condition: service_completed_successfully
+
+services:
+  # 서비스 DB와 다른 컨테이너로 둔다. 커넥션 예산과 백업 범위를 Airflow와 섞지 않는다.
+  airflow-metadb:
+    image: postgres:18
+    environment:
+      POSTGRES_USER: airflow
+      POSTGRES_PASSWORD: ${AIRFLOW_METADB_PASSWORD:?airflow/.env에 AIRFLOW_METADB_PASSWORD를 넣어야 합니다}
+      POSTGRES_DB: airflow
+    volumes:
+      - airflow-metadb-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U airflow -d airflow"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # 메타 DB 스키마를 맞춘다.
+  airflow-init:
+    <<: *airflow-common
+    command: ["db", "migrate"]
+    depends_on:
+      airflow-metadb:
+        condition: service_healthy
+
+  airflow-apiserver:
+    <<: *airflow-common
+    command: api-server
+    ports:
+      - "127.0.0.1:8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/api/v2/version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # LocalExecutor라 태스크도 여기서 돈다. 태스크는 오픈API 응답을 기다리는 시간이 대부분이라 워커를 따로 두지 않는다.
+  airflow-scheduler:
+    <<: *airflow-common
+    command: scheduler
+    # 태스크가 서비스 DB에 서비스 이름(postgres)으로 닿도록 루트 스택 네트워크에도 붙인다.
+    networks:
+      - default
+      - prop-trend
+    depends_on:
+      <<: *airflow-depends-on
+      airflow-apiserver:
+        condition: service_healthy
+
+  airflow-dag-processor:
+    <<: *airflow-common
+    command: dag-processor
+
+networks:
+  # 루트 스택이 만드는 네트워크다. 루트 스택이 먼저 떠 있어야 한다.
+  prop-trend:
+    external: true
+    name: prop_trend_default
+
+volumes:
+  airflow-metadb-data:
+  airflow-logs:

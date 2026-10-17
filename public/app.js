@@ -1,4 +1,4 @@
-// 갱신 파이프라인이 거슬러 올라가는 최대 개월 수(api/src/jobs/pipeline.py MAX_MONTHS)와 맞춘다.
+// 고를 수 있는 계약년월 수. 이전 갱신 배치가 거슬러 올라갈 수 있던 최대 개월 수(24)를 그대로 쓴다.
 const DEAL_MONTH_COUNT = 24;
 
 const sidoSelect = document.getElementById("sido");
