@@ -1,7 +1,7 @@
 """시장 지표 API 테스트."""
 
 from collections.abc import AsyncIterator
-from datetime import date
+from datetime import UTC, date, datetime
 
 import httpx
 import pytest
@@ -10,7 +10,15 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from src.dependencies import get_today
 from src.main import app
-from src.model import Complex, LegalDongCodeRawItem, PropertyType, RentTransaction, SaleTransaction
+from src.model import (
+    Complex,
+    LegalDongCodeRawItem,
+    MarketPriceMover,
+    MarketSnapshot,
+    PropertyType,
+    RentTransaction,
+    SaleTransaction,
+)
 
 from .conftest import seed_rows
 from .test_prop_transaction import APARTMENT_COMPLEX_ROW, seed_complexes
@@ -213,108 +221,55 @@ class TestGetDailySummary:
         }
 
 
-# 급등/급락 스위트의 기준일. 비교 기간은 2016-10-05부터, 최근 거래는 2025-10-05부터 인정한다.
-PRICE_MOVERS_BASE_DATE = date(2026, 10, 5)
-APT_ROW = BASE_SALE_ROW | {"deal_amount": 1_000_000_000}
-OFFICETEL_ROW = BASE_SALE_ROW | {
-    "property_type": PropertyType.OFFICETEL,
-    "jibun": "200-1",
-    "building_name": "역삼오피스텔",
-    "apartment_serial_number": None,
-    "apartment_dong": None,
-    "exclusive_use_area": 30.5,
+# 정기 갱신이 계산해 둔 결과 행. 스위트는 이 행에서 순위에 쓰는 값만 바꿔 시드를 만든다.
+PRICE_MOVER_ROW = {
+    "change_rate": 50.0,
+    "latest_id": 101,
+    "sido_code": "11",
+    "sigungu_code": "680",
+    "umd_name": "역삼동",
+    "jibun": "123-4",
+    "building_name": "역삼래미안",
+    "apartment_dong": "101",
+    "floor": 10,
+    "build_year": 2005,
+    "exclusive_use_area": 84.97,
+    "deal_date": date(2026, 9, 1),
+    "deal_amount": 1_500_000_000,
+    "dealing_type": "중개거래",
+    "cancel_deal_date": None,
+    "complex_id": 7,
+    "previous_id": 11,
+    "previous_deal_date": date(2025, 1, 10),
+    "previous_deal_amount": 1_000_000_000,
+    "previous_floor": 9,
+}
+PRICE_MOVERS_SNAPSHOT_ROW = {
+    "name": MarketPriceMover.__tablename__,
+    "base_date": date(2026, 10, 5),
+    "refreshed_at": datetime(2026, 10, 4, 19, 30, tzinfo=UTC),
 }
 
 
 class TestGetPriceMovers:
-    @pytest_asyncio.fixture(scope="class", loop_scope="session")
-    @classmethod
-    async def seed(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, SaleTransaction]]:
-        # 묶음마다 직전 거래(_prev)와 최근 거래(_latest)를 둔다.
-        prev, latest = {"deal_date": date(2025, 1, 10)}, {"deal_date": date(2026, 9, 1)}
-        # 순위에서 빠져야 하는 묶음은 빠지지 않으면 1위가 되도록 10배로 뛴 금액을 준다.
-        jump_prev, jump_latest = prev | {"deal_amount": 100_000_000}, latest | {"deal_amount": 1_000_000_000}
-        row_house = BASE_SALE_ROW | {
-            "property_type": PropertyType.ROW_HOUSE,
-            "house_type": "연립",
-            "apartment_serial_number": None,
-            "apartment_dong": None,
-        }
-        single_multi = row_house | {"property_type": PropertyType.SINGLE_MULTI, "house_type": "단독"}
-        no_serial = APT_ROW | {"apartment_serial_number": None, "building_name": "일련번호없음"}
-        sale_rows = {
-            # 급등: +50, +40, +30, +20(id 작음), +20(id 큼), +10 → 5위까지만 나온다.
-            "s1_prev": APT_ROW | {"apartment_serial_number": "11680-2001"} | prev,
-            "s1_latest": APT_ROW | {"apartment_serial_number": "11680-2001", "deal_amount": 1_500_000_000} | latest,
-            "s2_prev": APT_ROW | {"apartment_serial_number": "11680-2002", "deal_amount": 200_000_000} | prev,
-            "s2_latest": APT_ROW
-            | {"apartment_serial_number": "11680-2002", "deal_amount": 280_000_000, "floor": 7}
-            | latest,
-            "s3_prev": APT_ROW | {"apartment_serial_number": "11680-2003"} | prev,
-            "s3_latest": APT_ROW | {"apartment_serial_number": "11680-2003", "deal_amount": 1_300_000_000} | latest,
-            "s4_prev": APT_ROW | {"apartment_serial_number": "11680-2004"} | prev,
-            "s4_latest": APT_ROW | {"apartment_serial_number": "11680-2004", "deal_amount": 1_200_000_000} | latest,
-            "s5_prev": APT_ROW | {"apartment_serial_number": "11680-2005", "deal_amount": 500_000_000} | prev,
-            "s5_latest": APT_ROW | {"apartment_serial_number": "11680-2005", "deal_amount": 600_000_000} | latest,
-            "s6_prev": APT_ROW | {"apartment_serial_number": "11680-2006"} | prev,
-            "s6_latest": APT_ROW | {"apartment_serial_number": "11680-2006", "deal_amount": 1_100_000_000} | latest,
-            # 급락: -33.33(반올림), -20(해제 거래 건너뜀), -10, -5(s1과 같은 단지, 다른 면적).
-            "p1_prev": APT_ROW | {"apartment_serial_number": "11680-2101", "deal_amount": 300_000_000} | prev,
-            "p1_latest": APT_ROW | {"apartment_serial_number": "11680-2101", "deal_amount": 200_000_000} | latest,
-            "p2_prev": APT_ROW | {"apartment_serial_number": "11680-2102"} | prev,
-            "p2_latest": APT_ROW
-            | {"apartment_serial_number": "11680-2102", "deal_amount": 800_000_000, "deal_date": date(2026, 3, 1)},
-            "p2_cancelled": APT_ROW
-            | {"apartment_serial_number": "11680-2102", "deal_amount": 3_000_000_000, "cancel_deal_type": "O"}
-            | latest,
-            "p3_prev": APT_ROW | {"apartment_serial_number": "11680-2103", "deal_amount": 400_000_000} | prev,
-            "p3_latest": APT_ROW | {"apartment_serial_number": "11680-2103", "deal_amount": 360_000_000} | latest,
-            "p4_prev": APT_ROW
-            | {"apartment_serial_number": "11680-2001", "exclusive_use_area": 59.9, "deal_amount": 600_000_000}
-            | {"deal_date": date(2025, 2, 10)},
-            "p4_latest": APT_ROW
-            | {"apartment_serial_number": "11680-2001", "exclusive_use_area": 59.9, "deal_amount": 570_000_000}
-            | {"deal_date": date(2026, 8, 1)},
-            # 순위에서 빠지는 묶음.
-            "single": APT_ROW | {"apartment_serial_number": "11680-2301"} | jump_latest,
-            "too_old_prev": APT_ROW
-            | {"apartment_serial_number": "11680-2302", "deal_amount": 100_000_000, "deal_date": date(2021, 10, 4)},
-            "too_old_latest": APT_ROW | {"apartment_serial_number": "11680-2302"} | jump_latest,
-            "stale_prev": APT_ROW | {"apartment_serial_number": "11680-2303"} | jump_prev,
-            "stale_latest": APT_ROW
-            | {"apartment_serial_number": "11680-2303", "deal_amount": 1_000_000_000, "deal_date": date(2025, 10, 4)},
-            "unchanged_prev": APT_ROW | {"apartment_serial_number": "11680-2304"} | prev,
-            "unchanged_latest": APT_ROW | {"apartment_serial_number": "11680-2304"} | latest,
-            "officetel_prev": OFFICETEL_ROW | jump_prev,
-            "officetel_latest": OFFICETEL_ROW | jump_latest,
-            "row_house_prev": row_house | jump_prev,
-            "row_house_latest": row_house | jump_latest,
-            "single_multi_prev": single_multi | jump_prev,
-            "single_multi_latest": single_multi | jump_latest,
-            "no_serial_prev": no_serial | jump_prev,
-            "no_serial_latest": no_serial | jump_latest,
-        }
+    async def test_returns_saved_movers_in_rank_order(
+        self, client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
+    ) -> None:
+        """계산해 둔 결과를 급등·급락으로 나눠 변동률 순으로 주고, 동률이면 최근 거래 id 순이다."""
+        # 결과 테이블은 순서를 보장하지 않으므로 순위와 다른 순서로 넣는다.
+        rows = [
+            PRICE_MOVER_ROW | {"change_rate": 20.0, "latest_id": 300},
+            PRICE_MOVER_ROW | {"change_rate": -5.0, "latest_id": 400},
+            PRICE_MOVER_ROW,
+            PRICE_MOVER_ROW | {"change_rate": -33.33, "latest_id": 500, "complex_id": None},
+            PRICE_MOVER_ROW | {"change_rate": 20.0, "latest_id": 200},
+        ]
         async with (
             seed_rows(session_factory, LegalDongCodeRawItem, LEGAL_DONG_CODE_ROWS),
-            seed_rows(session_factory, SaleTransaction, list(sale_rows.values())) as sales,
+            seed_rows(session_factory, MarketSnapshot, [PRICE_MOVERS_SNAPSHOT_ROW]),
+            seed_rows(session_factory, MarketPriceMover, rows),
         ):
-            yield dict(zip(sale_rows, sales, strict=True))
-
-    @pytest_asyncio.fixture(scope="class", loop_scope="session")
-    @classmethod
-    async def complexes(cls, session_factory: async_sessionmaker[AsyncSession]) -> AsyncIterator[dict[str, Complex]]:
-        async with seed_complexes(
-            session_factory, {"s1": APARTMENT_COMPLEX_ROW | {"apartment_serial_number": "11680-2001"}}
-        ) as complexes:
-            yield complexes
-
-    async def test_returns_top_surge_and_plunge(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction], complexes: dict[str, Complex]
-    ) -> None:
-        """아파트 단지를 변동률 순으로 급등·급락 각 5개까지 주고, 동률이면 최근 거래 id 순이다."""
-        app.dependency_overrides[get_today] = lambda: PRICE_MOVERS_BASE_DATE
-
-        response = await client.get(PRICE_MOVERS_URL)
+            response = await client.get(PRICE_MOVERS_URL)
 
         assert response.status_code == 200
         body = response.json()
@@ -322,9 +277,9 @@ class TestGetPriceMovers:
         assert body["surge"][0] == {
             "change_rate": 50.0,
             "latest_sale": {
-                "id": seed["s1_latest"].id,
+                "id": 101,
                 "property_type": "APT",
-                "complex_id": complexes["s1"].id,
+                "complex_id": 7,
                 "deal_date": "2026-09-01",
                 "deal_amount": 1_500_000_000,
                 "dealing_type": "중개거래",
@@ -340,56 +295,35 @@ class TestGetPriceMovers:
                 "land_area": None,
                 "address": "서울특별시 강남구 역삼동 123-4",
             },
-            "previous_sale": {
-                "id": seed["s1_prev"].id,
-                "deal_date": "2025-01-10",
-                "deal_amount": 1_000_000_000,
-                "floor": 10,
-            },
+            "previous_sale": {"id": 11, "deal_date": "2025-01-10", "deal_amount": 1_000_000_000, "floor": 9},
         }
-        assert [
-            (mover["latest_sale"]["id"], mover["previous_sale"]["id"], mover["change_rate"]) for mover in body["surge"]
-        ] == [
-            (seed["s1_latest"].id, seed["s1_prev"].id, 50.0),
-            (seed["s2_latest"].id, seed["s2_prev"].id, 40.0),
-            (seed["s3_latest"].id, seed["s3_prev"].id, 30.0),
-            (seed["s4_latest"].id, seed["s4_prev"].id, 20.0),
-            (seed["s5_latest"].id, seed["s5_prev"].id, 20.0),
+        assert [(mover["latest_sale"]["id"], mover["change_rate"]) for mover in body["surge"]] == [
+            (101, 50.0),
+            (200, 20.0),
+            (300, 20.0),
         ]
-        assert [
-            (mover["latest_sale"]["id"], mover["previous_sale"]["id"], mover["change_rate"]) for mover in body["plunge"]
-        ] == [
-            (seed["p1_latest"].id, seed["p1_prev"].id, -33.33),
-            (seed["p2_latest"].id, seed["p2_prev"].id, -20.0),
-            (seed["p3_latest"].id, seed["p3_prev"].id, -10.0),
-            (seed["p4_latest"].id, seed["p4_prev"].id, -5.0),
+        assert [(mover["latest_sale"]["id"], mover["change_rate"]) for mover in body["plunge"]] == [
+            (500, -33.33),
+            (400, -5.0),
         ]
+        assert body["plunge"][0]["latest_sale"]["complex_id"] is None
 
-    async def test_excludes_ineligible_transactions(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
+    async def test_returns_empty_lists_when_no_saved_mover(
+        self, client: httpx.AsyncClient, session_factory: async_sessionmaker[AsyncSession]
     ) -> None:
-        """거래가 1건이거나 기간 밖이거나 대상 유형이 아니거나 단지 일련번호가 없거나 변동이 없는 묶음은 빠진다."""
-        app.dependency_overrides[get_today] = lambda: PRICE_MOVERS_BASE_DATE
-
-        response = await client.get(PRICE_MOVERS_URL)
+        """계산 결과가 0건이어도 기준일과 함께 빈 급등·급락 목록을 준다."""
+        async with seed_rows(session_factory, MarketSnapshot, [PRICE_MOVERS_SNAPSHOT_ROW]):
+            response = await client.get(PRICE_MOVERS_URL)
 
         assert response.status_code == 200
-        body = response.json()
-        ranked_ids = {mover["latest_sale"]["id"] for mover in body["surge"] + body["plunge"]}
-        excluded = ("single", "too_old_latest", "stale_latest", "unchanged_latest", "p2_cancelled")
-        excluded += ("officetel_latest", "row_house_latest", "single_multi_latest", "no_serial_latest")
-        assert ranked_ids.isdisjoint(seed[name].id for name in excluded)
+        assert response.json() == {"base_date": "2026-10-05", "surge": [], "plunge": []}
 
-    async def test_returns_empty_lists_when_no_recent_transaction(
-        self, client: httpx.AsyncClient, seed: dict[str, SaleTransaction]
-    ) -> None:
-        """기준일로부터 1년 안에 거래가 있는 묶음이 없으면 급등·급락 모두 빈 목록이다."""
-        app.dependency_overrides[get_today] = lambda: date(2028, 1, 1)
-
+    async def test_returns_503_before_first_refresh(self, client: httpx.AsyncClient) -> None:
+        """정기 갱신이 아직 한 번도 계산하지 않았으면 503이다."""
         response = await client.get(PRICE_MOVERS_URL)
 
-        assert response.status_code == 200
-        assert response.json() == {"base_date": "2028-01-01", "surge": [], "plunge": []}
+        assert response.status_code == 503
+        assert response.json()["message"] == "거래액 급등/급락 단지가 아직 집계되지 않았습니다"
 
 
 # 거래량 급등 스위트의 기준일. 최근 구간은 2026-08-05~09-04, 이전 구간은 2026-07-05~08-04다.

@@ -35,3 +35,9 @@ class ComplexNotFoundError(PropTrendError):
     """요청한 id의 단지가 없다."""
 
     status_code = status.HTTP_404_NOT_FOUND
+
+
+class MarketSnapshotNotReadyError(PropTrendError):
+    """정기 갱신이 시장 지표를 아직 한 번도 계산하지 않았다."""
+
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE

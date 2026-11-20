@@ -7,6 +7,7 @@ import subprocess
 from collections.abc import Iterator
 from contextlib import closing
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, NamedTuple
@@ -19,7 +20,15 @@ import rtms.tasks
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk.exceptions import AirflowFailException, AirflowSkipException
 from rtms.apis import RTMS_APIS
-from rtms.db import COMPLEX_COLUMNS, PROP_TREND_DB_CONN_ID, REGION_COLUMNS, RENT_COLUMNS, SALE_COLUMNS, SALE_INSERT_SQL
+from rtms.db import (
+    COMPLEX_COLUMNS,
+    MARKET_PRICE_MOVER_COLUMNS,
+    PROP_TREND_DB_CONN_ID,
+    REGION_COLUMNS,
+    RENT_COLUMNS,
+    SALE_COLUMNS,
+    SALE_INSERT_SQL,
+)
 from rtms.load import process_units
 from rtms.preprocess import preprocess_rtms
 from rtms.tasks import (
@@ -29,6 +38,7 @@ from rtms.tasks import (
     plan_rtms_chunks,
     process_regions,
     refresh_legal_dong,
+    refresh_price_movers,
 )
 from rtms_daily import RTMS_MONTHS
 
@@ -64,6 +74,8 @@ TABLES = (
     "rent_transactions",
     "complexes",
     "regions",
+    "market_price_movers",
+    "market_snapshots",
 )
 
 # 2026년 10월 회차라 최근 두 달(202610, 202609)이 갱신 범위다.
@@ -162,10 +174,11 @@ def sale(sgg_cd: str, deal_date: date, amount: str, **overrides: str) -> dict[st
     } | overrides
 
 
-def put_sale_transaction(conn: Any, api_id: str, payload: dict[str, str]) -> None:
-    """정제 테이블에 이미 있던 매매 한 건을 넣는다."""
+def put_sale_transaction(conn: Any, api_id: str, payload: dict[str, str]) -> int:
+    """정제 테이블에 이미 있던 매매 한 건을 넣고 id를 돌려준다."""
     row = preprocess_rtms(api_id, 0, payload)
-    execute(conn, SALE_INSERT_SQL, tuple(row[column] for column in SALE_COLUMNS))
+    [(sale_id,)] = execute(conn, f"{SALE_INSERT_SQL} RETURNING id", tuple(row[column] for column in SALE_COLUMNS))
+    return sale_id
 
 
 def apart_sale_item(**overrides: str) -> dict[str, str]:
@@ -409,6 +422,7 @@ def test_failed_unit_retries_chunk_even_with_missing_field(conn: Any, monkeypatc
         # property_type은 유형마다 upsert문에 값으로 박혀 있다. updated_at은 upsert문이 now()로 고친다.
         ("complexes", ("property_type", *COMPLEX_COLUMNS), {"id", "created_at", "updated_at"}),
         ("regions", REGION_COLUMNS, set()),
+        ("market_price_movers", MARKET_PRICE_MOVER_COLUMNS, {"id"}),
     ],
 )
 def test_insert_columns_match_model_table(conn: Any, table: str, columns: tuple[str, ...], defaults: set[str]) -> None:
@@ -539,3 +553,154 @@ def test_legal_dong_bronze_is_replaced(conn: Any, monkeypatch: pytest.MonkeyPatc
 
     assert summary == {"deleted": 1, "loaded": 1}
     assert execute(conn, "SELECT payload FROM legal_dong_code_raw_items") == [(new_row,)]
+
+
+def run_price_movers(monkeypatch: pytest.MonkeyPatch, base_date: date) -> dict[str, int | str]:
+    """기준일(KST)에 돈 것처럼 급등·급락 단지를 계산한다."""
+    run_at = pendulum.datetime(base_date.year, base_date.month, base_date.day, 4, tz="Asia/Seoul")
+    monkeypatch.setattr(rtms.tasks.pendulum, "now", lambda tz=None: run_at.in_timezone(tz or "UTC"))
+    return refresh_price_movers.function()
+
+
+def apart_sale(serial: str, deal_date: date, amount: str, **overrides: str) -> dict[str, str]:
+    """단지 일련번호와 전용면적을 갖춘 아파트 매매 응답 item 하나."""
+    return (
+        sale("11110", deal_date, amount, aptSeq=serial, excluUseAr="84.97", aptNm="청운아파트", floor="10") | overrides
+    )
+
+
+# 급등/급락 기준일. 비교 기간은 2021-10-05부터, 최근 거래는 2025-10-05부터 인정한다.
+PRICE_MOVERS_BASE_DATE = date(2026, 10, 5)
+PREV, LATEST = date(2025, 1, 10), date(2026, 9, 1)
+
+
+def test_price_movers_rank_surge_and_plunge(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    ids: dict[str, int] = {}
+    # 급등: +50, +40, +30, +20(id 작음), +20(id 큼), +10 → 5위까지만 남는다.
+    # 급락: -33.33(반올림), -20(해제 거래 건너뜀), -10, -5(s1과 같은 단지, 다른 면적).
+    groups = {
+        "s1": ("10,000", PREV, "15,000", LATEST),
+        "s2": ("20,000", PREV, "28,000", LATEST),
+        "s3": ("10,000", PREV, "13,000", LATEST),
+        "s4": ("10,000", PREV, "12,000", LATEST),
+        "s5": ("50,000", PREV, "60,000", LATEST),
+        "s6": ("10,000", PREV, "11,000", LATEST),
+        "p1": ("30,000", PREV, "20,000", LATEST),
+        "p2": ("10,000", PREV, "8,000", date(2026, 3, 1)),
+        "p3": ("40,000", PREV, "36,000", LATEST),
+    }
+    for name, (prev_amount, prev_date, latest_amount, latest_date) in groups.items():
+        ids[f"{name}_prev"] = put_sale_transaction(conn, "apart_sale", apart_sale(name, prev_date, prev_amount))
+        ids[name] = put_sale_transaction(conn, "apart_sale", apart_sale(name, latest_date, latest_amount))
+    put_sale_transaction(conn, "apart_sale", apart_sale("p2", LATEST, "30,000", cdealType="O", cdealDay="26.09.20"))
+    area = {"excluUseAr": "59.9"}
+    ids["p4_prev"] = put_sale_transaction(conn, "apart_sale", apart_sale("s1", date(2025, 2, 10), "60,000", **area))
+    ids["p4"] = put_sale_transaction(conn, "apart_sale", apart_sale("s1", date(2026, 8, 1), "57,000", **area))
+    [(complex_id,)] = execute(
+        conn,
+        "INSERT INTO complexes (property_type, sido_code, sigungu_code, umd_name, jibun, building_name, build_year, "
+        "apartment_serial_number) VALUES ('APT', '11', '110', '청운동', '1-1', '청운아파트', 2000, 's1') RETURNING id",
+    )
+
+    summary = run_price_movers(monkeypatch, PRICE_MOVERS_BASE_DATE)
+
+    assert summary == {"base_date": "2026-10-05", "deleted": 0, "loaded": 9}
+    ranks_sql = "SELECT latest_id, previous_id, change_rate FROM market_price_movers WHERE change_rate {} 0 ORDER BY {}"
+    assert execute(conn, ranks_sql.format(">", "change_rate DESC, latest_id")) == [
+        (ids["s1"], ids["s1_prev"], Decimal("50.00")),
+        (ids["s2"], ids["s2_prev"], Decimal("40.00")),
+        (ids["s3"], ids["s3_prev"], Decimal("30.00")),
+        (ids["s4"], ids["s4_prev"], Decimal("20.00")),
+        (ids["s5"], ids["s5_prev"], Decimal("20.00")),
+    ]
+    assert execute(conn, ranks_sql.format("<", "change_rate, latest_id")) == [
+        (ids["p1"], ids["p1_prev"], Decimal("-33.33")),
+        (ids["p2"], ids["p2_prev"], Decimal("-20.00")),
+        (ids["p3"], ids["p3_prev"], Decimal("-10.00")),
+        (ids["p4"], ids["p4_prev"], Decimal("-5.00")),
+    ]
+    # API가 거래 행을 다시 찾지 않고 응답하도록 최근 거래와 직전 거래, 단지 id를 옮겨 둔다.
+    assert execute(
+        conn,
+        f"SELECT {', '.join(MARKET_PRICE_MOVER_COLUMNS)} FROM market_price_movers WHERE latest_id = %s",  # noqa: S608
+        (ids["s1"],),
+    ) == [
+        (
+            Decimal("50.00"),
+            ids["s1"],
+            "11",
+            "110",
+            "청운동",
+            "1-1",
+            "청운아파트",
+            None,
+            10,
+            2000,
+            Decimal("84.9700"),
+            LATEST,
+            150_000_000,
+            None,
+            None,
+            complex_id,
+            ids["s1_prev"],
+            PREV,
+            100_000_000,
+            10,
+        )
+    ]
+    assert execute(conn, "SELECT name, base_date FROM market_snapshots") == [
+        ("market_price_movers", PRICE_MOVERS_BASE_DATE)
+    ]
+
+
+def test_price_movers_exclude_ineligible_groups(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    # 빠지지 않으면 1위가 되도록 모두 10배로 뛴다. 아파트가 아닌 유형도 일련번호·면적을 줘 유형 조건만으로 빠지게 한다.
+    groups = {
+        "single": [("apart_sale", apart_sale("single", LATEST, "100,000"))],
+        # 직전 거래가 비교 기간(5년) 밖이다.
+        "too_old": [
+            ("apart_sale", apart_sale("too_old", date(2021, 10, 4), "10,000")),
+            ("apart_sale", apart_sale("too_old", LATEST, "100,000")),
+        ],
+        # 최근 거래가 최근 기간(1년) 밖이다.
+        "stale": [
+            ("apart_sale", apart_sale("stale", PREV, "10,000")),
+            ("apart_sale", apart_sale("stale", date(2025, 10, 4), "100,000")),
+        ],
+        "unchanged": [
+            ("apart_sale", apart_sale("unchanged", PREV, "10,000")),
+            ("apart_sale", apart_sale("unchanged", LATEST, "10,000")),
+        ],
+        "no_serial": [
+            ("apart_sale", apart_sale("", PREV, "10,000")),
+            ("apart_sale", apart_sale("", LATEST, "100,000")),
+        ],
+        **{
+            api_id: [
+                (api_id, apart_sale(api_id[:10], PREV, "10,000")),
+                (api_id, apart_sale(api_id[:10], LATEST, "100,000")),
+            ]
+            for api_id in ("officetel_sale", "multiflex_sale", "single_multi_family_sale")
+        },
+    }
+    for rows in groups.values():
+        for api_id, payload in rows:
+            put_sale_transaction(conn, api_id, payload)
+
+    summary = run_price_movers(monkeypatch, PRICE_MOVERS_BASE_DATE)
+
+    assert summary["loaded"] == 0
+    assert execute(conn, "SELECT count(*) FROM market_price_movers") == [(0,)]
+
+
+def test_price_movers_replace_previous_result_and_base_date(conn: Any, monkeypatch: pytest.MonkeyPatch) -> None:
+    put_sale_transaction(conn, "apart_sale", apart_sale("s1", PREV, "10,000"))
+    put_sale_transaction(conn, "apart_sale", apart_sale("s1", LATEST, "15,000"))
+    run_price_movers(monkeypatch, PRICE_MOVERS_BASE_DATE)
+
+    # 데이터가 그대로여도 기준일이 밀리면 최근 기간을 벗어난 단지는 빠진다. 결과가 0건이어도 기준일은 남는다.
+    summary = run_price_movers(monkeypatch, date(2028, 1, 1))
+
+    assert summary == {"base_date": "2028-01-01", "deleted": 1, "loaded": 0}
+    assert execute(conn, "SELECT count(*) FROM market_price_movers") == [(0,)]
+    assert execute(conn, "SELECT name, base_date FROM market_snapshots") == [("market_price_movers", date(2028, 1, 1))]

@@ -162,6 +162,15 @@ def test_regions_follow_legal_dong_even_if_it_fails(dag: DAG) -> None:
     assert task.trigger_rule == "all_done"
 
 
+def test_price_movers_follow_apart_sale_process_even_if_it_fails(dag: DAG) -> None:
+    task = python_task(dag, "refresh_price_movers")
+
+    # 아파트 매매만 쓰므로 다른 유형의 정제를 기다리지 않는다.
+    assert task.upstream_task_ids == {"process_apart_sale"}
+    # 데이터가 그대로여도 기준일은 날마다 밀리므로 정제가 실패해도 다시 계산한다.
+    assert task.trigger_rule == "all_done"
+
+
 def test_summarize_waits_for_every_process_task(dag: DAG) -> None:
     summarize = dag.get_task("summarize")
 
@@ -195,6 +204,7 @@ def test_watcher_fails_the_run_when_any_task_fails(dag: DAG) -> None:
         *COLLECT_TASK_IDS,
         *CHECK_TASK_IDS,
         *PROCESS_TASK_IDS,
+        "refresh_price_movers",
     }
     assert watcher.trigger_rule == "one_failed"
     assert watcher.retries == 0

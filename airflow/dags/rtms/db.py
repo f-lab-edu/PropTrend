@@ -113,3 +113,90 @@ REGION_INSERT_SQL = (
     f"INSERT INTO regions ({', '.join(REGION_COLUMNS)}) "  # noqa: S608
     f"VALUES ({', '.join(f'%({column})s' for column in REGION_COLUMNS)})"
 )
+
+# api/src/model/market.py의 결과 테이블과 같아야 한다. id는 DB 기본값에 맡긴다.
+MARKET_PRICE_MOVER_COLUMNS = (
+    "change_rate",
+    "latest_id",
+    "sido_code",
+    "sigungu_code",
+    "umd_name",
+    "jibun",
+    "building_name",
+    "apartment_dong",
+    "floor",
+    "build_year",
+    "exclusive_use_area",
+    "deal_date",
+    "deal_amount",
+    "dealing_type",
+    "cancel_deal_date",
+    "complex_id",
+    "previous_id",
+    "previous_deal_date",
+    "previous_deal_amount",
+    "previous_floor",
+)
+# 이 기간 안의 거래만 비교에 쓴다.
+PRICE_MOVER_LOOKBACK_YEARS = 5
+# 최근 거래가 이 기간 안에 있는 단지만 순위에 넣는다. 오래전 거래끼리 비교한 결과가 섞이지 않게 한다.
+PRICE_MOVER_RECENT_YEARS = 1
+PRICE_MOVER_LIMIT = 5
+# 결과 테이블 이름이 곧 market_snapshots의 name이다. API가 같은 이름으로 기준일을 찾는다.
+MARKET_PRICE_MOVERS_TABLE = "market_price_movers"
+# 단지는 api/src/services/prop_transaction.py의 PRICE_TREND_GROUP_COLUMNS[APT](단지 일련번호 + 전용면적)로 묶는다.
+# 기준일이 2/29여도 깨지지 않도록 연 단위 경계는 interval 연산으로 구한다.
+MARKET_PRICE_MOVERS_INSERT_SQL = f"""
+    WITH ranked AS (
+        SELECT id AS latest_id, sido_code, sigungu_code, umd_name, jibun, building_name, apartment_dong, floor,
+               build_year, exclusive_use_area, deal_date, deal_amount, dealing_type, cancel_deal_date,
+               apartment_serial_number,
+               row_number() OVER w AS rn,
+               lead(id) OVER w AS previous_id,
+               lead(deal_date) OVER w AS previous_deal_date,
+               lead(deal_amount) OVER w AS previous_deal_amount,
+               lead(floor) OVER w AS previous_floor
+        FROM sale_transactions
+        WHERE property_type = 'APT'
+          AND deal_date >= %(base_date)s::date - make_interval(years => {PRICE_MOVER_LOOKBACK_YEARS})
+          -- 해제된 거래는 실제로 성사되지 않은 가격이라 비교에서 뺀다.
+          AND cancel_deal_type IS DISTINCT FROM 'O'
+          -- 묶음 컬럼이 NULL이면 같은 단지를 특정할 수 없어 뺀다.
+          AND apartment_serial_number IS NOT NULL
+          AND exclusive_use_area IS NOT NULL
+        WINDOW w AS (
+            PARTITION BY sido_code, sigungu_code, apartment_serial_number, exclusive_use_area
+            ORDER BY deal_date DESC, id DESC
+        )
+    ),
+    candidates AS (
+        -- 단지의 최근 거래 한 건에 직전 거래가 있으면 거래가 2건 이상인 단지다.
+        SELECT *,
+               round((deal_amount - previous_deal_amount)::numeric * 100 / previous_deal_amount, 2) AS change_rate
+        FROM ranked
+        WHERE rn = 1
+          AND previous_id IS NOT NULL
+          AND deal_date >= %(base_date)s::date - make_interval(years => {PRICE_MOVER_RECENT_YEARS})
+    ),
+    movers AS (
+        -- 변동률이 같으면 id가 작은 거래를 먼저 둔다.
+        (SELECT * FROM candidates WHERE change_rate > 0 ORDER BY change_rate DESC, latest_id
+         LIMIT {PRICE_MOVER_LIMIT})
+        UNION ALL
+        (SELECT * FROM candidates WHERE change_rate < 0 ORDER BY change_rate, latest_id
+         LIMIT {PRICE_MOVER_LIMIT})
+    )
+    INSERT INTO {MARKET_PRICE_MOVERS_TABLE} ({", ".join(MARKET_PRICE_MOVER_COLUMNS)})
+    SELECT {", ".join(MARKET_PRICE_MOVER_COLUMNS)}
+    FROM (
+        SELECT movers.*, complexes.id AS complex_id
+        FROM movers
+        LEFT JOIN complexes
+            ON complexes.property_type = 'APT'
+           AND complexes.apartment_serial_number = movers.apartment_serial_number
+    ) AS joined
+"""  # noqa: S608 - 테이블·컬럼 이름과 숫자는 이 모듈의 상수에서만 온다. 기준일은 바인드 파라미터다.
+MARKET_SNAPSHOT_UPSERT_SQL = """
+    INSERT INTO market_snapshots (name, base_date, refreshed_at) VALUES (%(name)s, %(base_date)s, now())
+    ON CONFLICT (name) DO UPDATE SET base_date = EXCLUDED.base_date, refreshed_at = EXCLUDED.refreshed_at
+"""

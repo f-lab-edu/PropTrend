@@ -1,4 +1,4 @@
-"""실거래 정기 갱신. 법정동코드와 실거래 8종의 오픈API 응답을 bronze 표에 갈아끼우고 정제 테이블로 옮긴다."""
+"""실거래 정기 갱신. 법정동코드와 실거래 8종의 오픈API 응답을 bronze·정제 테이블에 갈아끼우고 시장 지표를 계산한다."""
 
 # 이 파일은 태스크 그래프만 선언한다. 오픈API 호출·전처리·SQL·적재 루프는 rtms 패키지에 기능별로 있다.
 from datetime import timedelta
@@ -14,6 +14,7 @@ from rtms.tasks import (
     process_regions,
     process_rtms,
     refresh_legal_dong,
+    refresh_price_movers,
 )
 
 # 신고 기한 30일과 뒤늦은 해제·정정 때문에 지난 달 데이터도 계속 바뀐다. 정기 실행의 갱신 개월 수다.
@@ -52,10 +53,11 @@ MAX_RTMS_MONTHS = 24
     },
 )
 def rtms_daily() -> None:
-    """법정동코드와 지역 목록을 교체하고, API 8종을 묶음별로 bronze에 받아 정제 테이블로 옮긴다."""
+    """법정동코드와 지역 목록을 교체하고, API 8종을 묶음별로 bronze에 받아 정제한 뒤 시장 지표를 계산한다."""
     legal_dong = refresh_legal_dong()
     regions = process_regions()
     chunks = plan_rtms_chunks()
+    price_movers = refresh_price_movers()
 
     legal_dong >> [regions, chunks]
 
@@ -69,6 +71,9 @@ def rtms_daily() -> None:
         # 같은 API의 묶음이 다 끝난 뒤에 돈다. 필드 대조를 기다리지 않는다. 누락이 있어도 받은 bronze로 정제한다.
         process = process_rtms.override(task_id=f"process_{api_id}")(api_id)
         collect >> [check, process]
+        # 급등·급락 단지는 아파트 매매만 쓰므로 다른 유형의 정제를 기다리지 않는다.
+        if api_id == "apart_sale":
+            process >> price_movers
         collects.append(collect)
         checks.append(check)
         processes.append(process)
@@ -94,7 +99,7 @@ def rtms_daily() -> None:
 
     # bronze 요약을 check에서 꺼내므로 정제와 나란히 도는 check도 기다린다.
     [*checks, *processes] >> summarize()
-    [legal_dong, regions, chunks, *collects, *checks, *processes] >> watcher()
+    [legal_dong, regions, chunks, *collects, *checks, *processes, price_movers] >> watcher()
 
 
 rtms_daily()
