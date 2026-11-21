@@ -19,7 +19,6 @@ class RtmsApi(NamedTuple):
     known_fields: frozenset[str]
 
 
-# scripts/src/process_silver.py의 SPECS와 같아야 한다. DAG는 src를 import하지 않으므로 따로 든다.
 # 키는 rtms_raw_items.api_id에 그대로 들어가는 슬러그다. 오타가 나면 silver가 그 행을 영영 못 찾는다.
 # 필드 기준선은 여기에만 있다. 응답 필드가 바뀌어 정리 규칙을 고칠 때 함께 고친다.
 RTMS_APIS = {

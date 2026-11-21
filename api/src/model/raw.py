@@ -1,4 +1,4 @@
-"""scripts/docs/data-api의 9개 오픈API 응답 item을 스키마 종속 없이 보관하는 bronze 모델.
+"""9개 오픈API 응답 item을 스키마 종속 없이 보관하는 bronze 모델.
 
 값 검증과 타입 정규화는 이 표들을 읽어가는 silver(prop_transaction) 계층의 책임이다.
 갱신 방식이 달라 표를 나눈다. 실거래가 8종은 (계약년월, 시군구) 구간을 갈아끼우고,
