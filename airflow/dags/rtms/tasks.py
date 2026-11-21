@@ -6,13 +6,20 @@ from contextlib import closing
 from datetime import timedelta
 from typing import Any, cast
 
+import pendulum
 from airflow.providers.http.hooks.http import HttpHook
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.sdk import TriggerRule, task
 from requests_toolbelt.adapters.socket_options import TCPKeepAliveAdapter
 
 from rtms.apis import LEGAL_DONG_CODE_KNOWN_FIELDS
-from rtms.db import PROP_TREND_DB_CONN_ID, REGION_INSERT_SQL
+from rtms.db import (
+    MARKET_PRICE_MOVERS_INSERT_SQL,
+    MARKET_PRICE_MOVERS_TABLE,
+    MARKET_SNAPSHOT_UPSERT_SQL,
+    PROP_TREND_DB_CONN_ID,
+    REGION_INSERT_SQL,
+)
 from rtms.load import check_fields, collect_units, process_units, rtms_units
 from rtms.open_api import DATA_GO_KR_CONN_ID, OPEN_API_RETRIES, fetch_legal_dong_rows, get_service_key
 from rtms.preprocess import preprocess_regions
@@ -154,3 +161,27 @@ def process_regions() -> dict[str, int]:
 
     log.info("지역 %d건 교체(삭제 %d건)", len(rows), deleted)
     return {"deleted": deleted, "loaded": len(rows)}
+
+
+# 아파트 매매 정제가 실패·건너뜀이어도 돈다. 데이터가 그대로여도 기준일은 날마다 밀리므로
+# 남은 정제 테이블로 다시 계산한다.
+@task(trigger_rule=TriggerRule.ALL_DONE, execution_timeout=timedelta(minutes=10))
+def refresh_price_movers() -> dict[str, int | str]:
+    """아파트 매매로 거래액 급등·급락 단지를 계산해 결과 테이블을 갈아끼운다."""
+    # 회차의 논리 일자가 아니라 지금의 KST 날짜다. 지난 회차를 Clear해 다시 돌려도 지금의 정제 테이블로
+    # 계산하기 때문이다.
+    base_date = pendulum.now("Asia/Seoul").date()
+    hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
+    with closing(hook.get_conn()) as conn:
+        # 비우기·채우기·기준일 기록은 한 트랜잭션이어야 한다. 커밋 전까지 API는 이전 결과와 기준일을 그대로 본다.
+        # TRUNCATE는 계산하는 동안 조회까지 막는 잠금을 잡으므로 DELETE로 비운다.
+        with closing(conn.cursor()) as cursor:
+            cursor.execute(f"DELETE FROM {MARKET_PRICE_MOVERS_TABLE}")  # noqa: S608 - 이 모듈이 import한 상수다.
+            deleted = cursor.rowcount
+            cursor.execute(MARKET_PRICE_MOVERS_INSERT_SQL, {"base_date": base_date})
+            loaded = cursor.rowcount
+            cursor.execute(MARKET_SNAPSHOT_UPSERT_SQL, {"name": MARKET_PRICE_MOVERS_TABLE, "base_date": base_date})
+        conn.commit()
+
+    log.info("거래액 급등·급락 %d건 교체(삭제 %d건, 기준일 %s)", loaded, deleted, base_date)
+    return {"base_date": base_date.isoformat(), "deleted": deleted, "loaded": loaded}

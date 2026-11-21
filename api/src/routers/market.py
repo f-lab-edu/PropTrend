@@ -47,7 +47,8 @@ async def get_market_daily_summary(
     description=(
         "아파트 단지별로 최근 매매와 바로 앞 매매의 금액 변동률을 구해 상승률 상위 5개와 하락률 상위 5개를 "
         "반환합니다.\n\n"
-        "- 기준일은 호출일(KST)이며, 계약일이 기준일로부터 5년 이내인 매매만 비교에 씁니다.\n"
+        "- 매일 정기 갱신이 끝난 뒤 미리 계산해 둔 결과입니다. 다음 갱신 전까지는 같은 결과를 줍니다.\n"
+        "- `base_date`는 마지막 정기 갱신의 기준일(KST)입니다. 계약일이 기준일로부터 5년 이내인 매매만 비교에 씁니다.\n"
         "- 아파트 매매만 다룹니다. 오피스텔·연립다세대·단독다가구는 빼고, 해제된 매매도 뺍니다.\n"
         "- 단지는 전용면적별로 나눠 비교합니다. 단지 일련번호 + 전용면적으로 묶습니다.\n"
         "- 단지 일련번호가 없는 아파트 매매(상세 자료로 재수집되기 전 과거 거래)는 뺍니다.\n"
@@ -56,17 +57,18 @@ async def get_market_daily_summary(
         "- `surge`는 변동률이 0보다 큰 단지, `plunge`는 0보다 작은 단지만 담으며 5개보다 적을 수 있습니다.\n"
         "- 변동률이 같으면 최근 거래의 `id`가 작은 단지가 먼저 옵니다.\n"
         "- `latest_sale.complex_id`는 최근 거래가 속한 단지 id입니다.\n"
-        "- 요청마다 전국 아파트 거래를 집계하므로 응답에 수 초가 걸릴 수 있습니다.\n"
-        "- `deal_amount`의 단위는 원입니다."
+        "- 거래 `id`는 정기 갱신이 그 계약년월을 다시 적재하면 바뀝니다.\n"
+        "- `deal_amount`의 단위는 원입니다.\n"
+        "- 정기 갱신이 아직 한 번도 집계하지 않았으면 503을 반환합니다."
     ),
 )
 async def get_market_price_movers(
     session: Annotated[AsyncSession, Depends(get_session)],
-    today: Annotated[date, Depends(get_today)],
 ) -> PriceMoversResponse:
     """거래액 급등/급락 단지 TOP 5를 조회한다."""
+    # 기준일은 요청일이 아니라 결과를 계산한 정기 갱신의 기준일이라 get_today를 받지 않는다.
     async with session.begin():
-        return await get_price_movers(session, base_date=today)
+        return await get_price_movers(session)
 
 
 @router.get(

@@ -7,12 +7,14 @@
 - complex: 실거래 갱신과 무관하게 유지되는 아파트·오피스텔 단지
 - favorite: 사용자가 즐겨찾기한 단지
 - region: legal_dong_code_raw_items를 가공해 채우는 시도·시군구 목록
+- market: 정기 갱신이 미리 계산해 두는 시장 지표 결과
 """
 
 from .base import Base
 from .complex import COMPLEX_INDEX_WHERE, COMPLEX_KEY_COLUMNS, COMPLEX_PROPERTY_TYPES, Complex
 from .favorite import FavoriteComplex
 from .load_progress import RawLoadProgress
+from .market import MarketPriceMover, MarketSnapshot
 from .prop_transaction import (
     PropertyType,
     RentTransaction,
@@ -34,6 +36,8 @@ __all__ = [
     "Complex",
     "FavoriteComplex",
     "LegalDongCodeRawItem",
+    "MarketPriceMover",
+    "MarketSnapshot",
     "PropertyType",
     "RTMSRawItem",
     "RawLoadProgress",
