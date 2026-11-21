@@ -1,6 +1,6 @@
 """rtms_raw_items(bronze)를 가공해 채우는 실거래 정제 테이블 모델.
 
-설계 근거는 `scripts/docs/schema/draft.md`. 요약하면,
+설계 근거는 다음과 같다.
 
 - 매매/전월세는 필드 집합이 근본적으로 다르므로 테이블을 분리한다
   (`sale_transactions` / `rent_transactions`).
