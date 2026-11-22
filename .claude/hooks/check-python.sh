@@ -12,10 +12,11 @@ unset VIRTUAL_ENV
 input=$(cat)
 # jq가 없는 환경에서도 돌도록, jq가 없으면 단순 문자열·불리언 필드만 sed로 꺼낸다.
 field() {
+  local key=$1
   if command -v jq >/dev/null 2>&1; then
-    printf '%s' "$input" | jq -r --arg key "$1" '.[$key] // empty'
+    printf '%s' "$input" | jq -r --arg key "$key" '.[$key] // empty'
   else
-    printf '%s' "$input" | sed -nE "s/.*\"$1\"[[:space:]]*:[[:space:]]*\"?([^\",}]*)\"?.*/\1/p" | head -n 1
+    printf '%s' "$input" | sed -nE "s/.*\"$key\"[[:space:]]*:[[:space:]]*\"?([^\",}]*)\"?.*/\1/p" | head -n 1
   fi
 }
 
