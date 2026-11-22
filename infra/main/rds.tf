@@ -46,6 +46,8 @@ resource "aws_db_instance" "this" {
 
   allocated_storage = 20
   storage_type      = "gp3"
+  # 추가 비용 없이 디스크를 암호화한다. 생성 뒤에는 바꿀 수 없어 처음부터 켠다.
+  storage_encrypted = true
 
   db_name  = "prop_trend"
   username = "postgres"

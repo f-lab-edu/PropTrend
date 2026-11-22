@@ -10,12 +10,20 @@ spec:
   template:
     spec:
       restartPolicy: OnFailure
+      # psql만 돌려 쿠버네티스 API를 부르지 않으므로 토큰을 넣지 않는다.
+      automountServiceAccountToken: false
       containers:
         - name: psql
           image: postgres:18
           envFrom:
             - secretRef:
                 name: db-admin
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              memory: 128Mi
           command:
             - sh
             - -c

@@ -34,6 +34,25 @@ resource "aws_s3_bucket_public_access_block" "state" {
   restrict_public_buckets = true
 }
 
+# state에 비밀번호가 평문으로 들어 있어 암호화되지 않은 HTTP 요청은 거부한다.
+resource "aws_s3_bucket_policy" "state" {
+  bucket = aws_s3_bucket.state.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Sid       = "DenyInsecureTransport"
+      Effect    = "Deny"
+      Principal = "*"
+      Action    = "s3:*"
+      Resource  = [aws_s3_bucket.state.arn, "${aws_s3_bucket.state.arn}/*"]
+      Condition = { Bool = { "aws:SecureTransport" = "false" } }
+    }]
+  })
+
+  # 공개 차단 설정과 동시에 만들면 정책 적용이 충돌할 수 있다.
+  depends_on = [aws_s3_bucket_public_access_block.state]
+}
+
 resource "aws_ecr_repository" "this" {
   for_each = toset(["api", "airflow"])
 
