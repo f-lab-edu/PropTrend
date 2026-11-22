@@ -52,8 +52,9 @@ apply_data_go_kr_secret() {
 # 없을 때만 임의 값으로 Secret을 만든다. $1: 이름, $2: 키
 # 차트에 맡기면 helm upgrade마다 값을 새로 만들어 컴포넌트가 재시작되고 이미 발급한 토큰이 무효가 된다.
 ensure_random_secret() {
-    kubectl --context "$CTX" -n airflow get secret "$1" >/dev/null 2>&1 && return 0
-    kubectl --context "$CTX" -n airflow create secret generic "$1" --from-literal="$2=$(openssl rand -hex 32)"
+    local name=$1 key=$2
+    kubectl --context "$CTX" -n airflow get secret "$name" >/dev/null 2>&1 && return 0
+    kubectl --context "$CTX" -n airflow create secret generic "$name" --from-literal="$key=$(openssl rand -hex 32)"
 }
 
 # 메타 DB를 만들고 Airflow 차트를 설치한다. $1: 이미지 저장소, $2: 태그, $3: 환경(kind|eks)
