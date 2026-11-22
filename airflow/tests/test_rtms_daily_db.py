@@ -671,6 +671,11 @@ def test_price_movers_exclude_ineligible_groups(conn: Any, monkeypatch: pytest.M
             ("apart_sale", apart_sale("unchanged", PREV, "10,000")),
             ("apart_sale", apart_sale("unchanged", LATEST, "10,000")),
         ],
+        # 직전 거래액이 0원이면 변동률을 정할 수 없다. 갱신이 실패하지 않고 이 단지만 빠져야 한다.
+        "zero_previous": [
+            ("apart_sale", apart_sale("zero_prev", PREV, "0")),
+            ("apart_sale", apart_sale("zero_prev", LATEST, "100,000")),
+        ],
         "no_serial": [
             ("apart_sale", apart_sale("", PREV, "10,000")),
             ("apart_sale", apart_sale("", LATEST, "100,000")),

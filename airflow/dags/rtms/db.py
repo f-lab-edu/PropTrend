@@ -171,8 +171,10 @@ MARKET_PRICE_MOVERS_INSERT_SQL = f"""
     ),
     candidates AS (
         -- 단지의 최근 거래 한 건에 직전 거래가 있으면 거래가 2건 이상인 단지다.
+        -- 직전 거래액 0원은 막는 제약이 없어 0 나누기로 갱신 전체가 실패하지 않게 NULL로 두고 부호 조건에서 뺀다.
         SELECT *,
-               round((deal_amount - previous_deal_amount)::numeric * 100 / previous_deal_amount, 2) AS change_rate
+               round((deal_amount - previous_deal_amount)::numeric * 100 / NULLIF(previous_deal_amount, 0), 2)
+                   AS change_rate
         FROM ranked
         WHERE rn = 1
           AND previous_id IS NOT NULL
