@@ -71,6 +71,12 @@ install_airflow() {
     # 훅을 끈 마이그레이션 Job도 같은 이유로 이미지 태그가 바뀌면 upgrade가 실패한다. 차트가 다시 만든다.
     kubectl --context "$CTX" -n airflow delete job airflow-run-airflow-migrations --ignore-not-found
 
+    # 차트는 밖에서 만든 이 Secret을 checksum에 넣지 않아, 키만 바꿔 다시 배포하면 파드가 옛 값을 계속 쓴다.
+    # 값의 해시를 annotation에 넣어 키가 바뀔 때만 scheduler가 다시 뜨게 한다. LocalExecutor라 태스크는 scheduler에서 돈다.
+    local conn_checksum
+    conn_checksum=$(kubectl --context "$CTX" -n airflow get secret data-go-kr \
+        -o jsonpath='{.data.AIRFLOW_CONN_DATA_GO_KR}' | openssl dgst -sha256 -r | cut -d' ' -f1)
+
     helm repo add apache-airflow https://airflow.apache.org --force-update >/dev/null
     helm upgrade --install airflow apache-airflow/airflow \
         --kube-context "$CTX" --namespace airflow \
@@ -79,5 +85,6 @@ install_airflow() {
         -f "$ROOT/k8s/airflow/values-$env.yaml" \
         --set images.airflow.repository="$repository" \
         --set images.airflow.tag="$tag" \
+        --set scheduler.podAnnotations.checksum/data-go-kr="$conn_checksum" \
         --wait --timeout 15m
 }
