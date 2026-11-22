@@ -10,3 +10,8 @@ _workspace/
 .DS_Store
 .claude/.check-python-*
 k8s/.deploy.*/
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
