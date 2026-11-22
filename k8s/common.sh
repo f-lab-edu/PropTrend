@@ -32,13 +32,20 @@ apply_data_go_kr_secret() {
     local key
     # .env를 source하면 그 안의 내용이 셸 코드로 실행되므로 해당 줄만 읽는다.
     key=$(sed -n 's/^DATA_GO_KR_SERVICE_KEY=//p' "$ROOT/airflow/.env" | tail -n 1)
+    # compose는 값을 감싼 따옴표를 떼고 읽는다. 같은 .env를 쓰므로 똑같이 뗀다.
+    if [[ $key =~ ^\"(.*)\"$ || $key =~ ^\'(.*)\'$ ]]; then
+        key=${BASH_REMATCH[1]}
+    fi
     if [[ -z "$key" ]]; then
         echo "airflow/.env에 DATA_GO_KR_SERVICE_KEY를 넣어야 합니다." >&2
         return 1
     fi
     # 키에 /·+·=가 있어 URI가 아닌 JSON 형식을 쓴다. password에 둬야 태스크 로그에서 가려진다.
+    # 문자열을 이어 붙이면 키에 따옴표나 역슬래시가 있을 때 JSON이 깨져 jq로 인코딩한다.
+    local conn
+    conn=$(printf '%s' "$key" | jq -cR '{conn_type: "http", host: "https://apis.data.go.kr", password: .}')
     kubectl --context "$CTX" -n airflow create secret generic data-go-kr \
-        --from-literal=AIRFLOW_CONN_DATA_GO_KR="{\"conn_type\": \"http\", \"host\": \"https://apis.data.go.kr\", \"password\": \"$key\"}" \
+        --from-literal=AIRFLOW_CONN_DATA_GO_KR="$conn" \
         --dry-run=client -o yaml | kubectl --context "$CTX" apply -f -
 }
 
