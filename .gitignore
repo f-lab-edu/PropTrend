@@ -8,3 +8,4 @@ logs/
 _workspace/
 .venv
 .DS_Store
+.claude/.check-python-*
