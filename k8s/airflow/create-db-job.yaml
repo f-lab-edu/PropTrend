@@ -1,0 +1,25 @@
+# Airflow 메타 DB를 서비스 DB와 같은 서버에 만든다. RDS는 인스턴스를 만들 때 DB를 하나만 만들어 준다.
+# 접속 정보는 db-admin Secret(PGHOST·PGUSER·PGPASSWORD·PGSSLMODE)에서 libpq 환경변수로 받는다.
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: create-airflow-db
+spec:
+  backoffLimit: 6
+  ttlSecondsAfterFinished: 600
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: postgres:18
+          envFrom:
+            - secretRef:
+                name: db-admin
+          command:
+            - sh
+            - -c
+            # CREATE DATABASE에는 IF NOT EXISTS가 없어 먼저 있는지 본다. 다시 배포해도 실패하지 않는다.
+            - >-
+              psql -d postgres -tAc "SELECT 1 FROM pg_database WHERE datname = 'airflow'" | grep -q 1
+              || psql -d postgres -c "CREATE DATABASE airflow"

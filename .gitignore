@@ -9,3 +9,4 @@ _workspace/
 .venv
 .DS_Store
 .claude/.check-python-*
+k8s/.deploy.*/

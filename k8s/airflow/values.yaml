@@ -1,0 +1,98 @@
+# apache-airflow/airflow 1.22.0 차트 값. kind와 EKS가 함께 쓰고, 환경별 차이는 values-<환경>.yaml에 둔다.
+# airflow/docker-compose.yml과 같은 구성을 쿠버네티스로 옮긴 것이다.
+
+# 차트 기본값(3.2.2)보다 새 버전이다. 이미지의 Airflow 버전과 맞춰야 차트가 맞는 설정을 렌더링한다.
+airflowVersion: "3.3.2"
+images:
+  airflow:
+    # 저장소와 태그는 kind.sh·eks.sh가 --set으로 준다.
+    repository: prop-trend-airflow
+    tag: dev
+    pullPolicy: IfNotPresent
+
+# compose와 같이 태스크를 스케줄러 파드 안에서 돌린다. 태스크는 오픈API 응답을 기다리는 시간이 대부분이다.
+executor: LocalExecutor
+workers:
+  celery:
+    # 켜 두면 LocalExecutor 스케줄러가 로그 PVC를 가진 StatefulSet이 되어 StorageClass(EBS CSI)가 필요해진다.
+    persistence:
+      enabled: false
+
+# 메타 DB는 차트 내장 postgres 대신 외부 DB(kind는 클러스터 안 postgres, EKS는 RDS)를 쓴다.
+postgresql:
+  enabled: false
+data:
+  # connection 키에 SQLAlchemy URL이 든 Secret. kind.sh·Terraform이 만든다.
+  metadataSecretName: airflow-metadata
+# 컴포넌트끼리 공유하는 키. common.sh가 처음 한 번만 만든다.
+# 차트가 만드는 이름(airflow-api-secret-key 등)과 겹치면 upgrade 때 차트가 자기 것으로 보고 지운다.
+apiSecretKeySecretName: api-secret-key
+jwtSecretName: jwt-secret
+# 같은 네임스페이스 Service마다 주입되는 환경변수다. 쓰지 않고, 차트 2.0에서 기본값이 꺼진다.
+enableServiceLinks: false
+
+# 쓰지 않는 컴포넌트다. DAG에 deferrable 태스크가 없고, Celery·지표 수집을 쓰지 않는다.
+redis:
+  enabled: false
+statsd:
+  enabled: false
+triggerer:
+  enabled: false
+# FAB 사용자를 만드는 잡이다. 아래에서 simple auth manager로 바꾸므로 필요 없다.
+createUserJob:
+  enabled: false
+
+# helm --wait와 훅을 같이 쓰면 배포가 마이그레이션 훅을 기다리고 훅은 배포 완료를 기다려 멈춘다.
+migrateDatabaseJob:
+  useHelmHooks: false
+  applyCustomEnv: false
+
+# 태스크가 읽는 Connection. compose처럼 환경변수로만 두면 메타 DB와 UI 편집 경로에 비밀값이 남지 않는다.
+secret:
+  # DB 접속 정보는 DB를 만든 쪽(kind.sh·Terraform)이 넣는다.
+  - envName: AIRFLOW_CONN_PROP_TREND_DB
+    secretName: airflow-connections
+    secretKey: AIRFLOW_CONN_PROP_TREND_DB
+  # 인증키는 airflow/.env에서 common.sh가 넣는다. Terraform이 만들면 키가 state 파일에 평문으로 남는다.
+  - envName: AIRFLOW_CONN_DATA_GO_KR
+    secretName: data-go-kr
+    secretKey: AIRFLOW_CONN_DATA_GO_KR
+
+config:
+  core:
+    default_timezone: Asia/Seoul
+    load_examples: "False"
+    # UI는 kubectl port-forward로만 연다. 외부에 노출하지 않으므로 compose처럼 로그인을 생략한다.
+    auth_manager: airflow.api_fastapi.auth.managers.simple.simple_auth_manager.SimpleAuthManager
+    simple_auth_manager_all_admins: "True"
+    # api-server는 태스크 로그를 스케줄러 파드의 로그 서버에서 받는다. Deployment 파드의 호스트명은 DNS로
+    # 풀리지 않아 파드 IP로 등록한다. (StatefulSet이면 이름이 풀리지만 위의 persistence를 켜야 한다.)
+    hostname_callable: airflow.utils.net.get_host_ip_address
+
+apiServer:
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1Gi
+    limits:
+      memory: 2Gi
+scheduler:
+  # LocalExecutor라 태스크 프로세스도 여기서 돈다. DAG의 max_active_tasks=4만큼 동시에 돈다.
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1536Mi
+    limits:
+      memory: 3Gi
+  # 로그 정리 사이드카. 실습 시간이 짧아 정리할 로그가 쌓이지 않는다.
+  logGroomerSidecar:
+    enabled: false
+dagProcessor:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+    limits:
+      memory: 1Gi
+  logGroomerSidecar:
+    enabled: false

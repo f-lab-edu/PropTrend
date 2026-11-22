@@ -1,0 +1,10 @@
+# kind용. 로컬 노드에는 요청량을 다 채울 자원이 없을 수 있어 requests를 비운다.
+apiServer:
+  resources:
+    requests: {}
+scheduler:
+  resources:
+    requests: {}
+dagProcessor:
+  resources:
+    requests: {}
