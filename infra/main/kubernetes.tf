@@ -12,6 +12,10 @@ resource "kubernetes_namespace_v1" "this" {
 
   metadata {
     name = each.key
+    # api는 replica가 하나라, 새 파드가 ALB 헬스체크를 통과하기 전에 기존 파드가 내려가면 타깃이 빈다.
+    # readiness gate로 ALB에서 healthy가 된 뒤에 Ready가 되게 한다. 컨트롤러 웹훅은 TargetGroupBinding이
+    # 이미 있을 때 만든 파드에만 gate를 붙여 첫 배포에는 빠지지만, 그때는 넘겨받을 트래픽이 없다.
+    labels = each.key == "prop-trend" ? { "elbv2.k8s.aws/pod-readiness-gate-inject" = "enabled" } : {}
   }
 
   depends_on = [helm_release.load_balancer_controller]
