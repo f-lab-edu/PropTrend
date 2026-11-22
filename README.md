@@ -8,12 +8,62 @@
 
 ## 프로젝트 시스템
 
-![project_infra_structure](/prop-trend-system.drawio.png)
+AWS 배포 구성이다. 인프라는 `infra/`의 Terraform이, 앱은 `k8s/`의 매니페스트와 Helm 차트가 만든다.
 
-- 공공 데이터 API: 다양한 원본 데이터를 제공하는 API
-- API Application Server: 스케줄러에 의해서 데이터 수집, 가공, 적재 작업과 다양한 비즈니스 로직을 수행하는 API
-- DB: 원본 데이터를 필요에 맞게 가공하여 적재하는 데이터베이스
-- WebServer: 사용자 UI 웹 페이지 제공 서버
+```mermaid
+flowchart LR
+    user["사용자 브라우저"]
+    dev["개발자"]
+    datagokr["공공데이터포털 오픈API"]
+
+    subgraph aws["AWS 서울 리전"]
+        cf["CloudFront"]
+        ecr["ECR"]
+        s3["S3<br/>Terraform state"]
+        subgraph vpc["VPC"]
+            subgraph pub["Public Subnet × 2 AZ"]
+                alb["ALB"]
+                subgraph eks["EKS 관리형 노드그룹"]
+                    lbc["AWS Load Balancer Controller"]
+                    api["API 서버<br/>FastAPI + 웹 페이지"]
+                    subgraph airflow["Airflow"]
+                        afapi["api-server"]
+                        sched["scheduler<br/>LocalExecutor"]
+                        dagp["dag-processor"]
+                    end
+                end
+            end
+            subgraph priv["Private Subnet × 2 AZ"]
+                rds[("RDS PostgreSQL<br/>prop_trend · airflow")]
+            end
+        end
+    end
+
+    user -- HTTPS --> cf
+    cf -- HTTP --> alb
+    alb --> api
+    lbc -. 파드 IP 등록 .-> alb
+    api --> rds
+    sched -- 수집 --> datagokr
+    sched -- 적재 --> rds
+    afapi --> rds
+    dev -- kubectl port-forward --> afapi
+    ecr -. 이미지 .-> eks
+```
+
+- 공공데이터포털 오픈API: 법정동코드와 부동산 실거래 원본 데이터를 제공하는 외부 API
+- CloudFront: 도메인 없이 HTTPS를 제공하는 진입점. 세션 쿠키가 Secure라 HTTPS가 필요하다
+- ALB: CloudFront에서 온 요청만 받아 API 서버 파드로 넘기는 로드밸런서
+- EKS: API 서버와 Airflow를 컨테이너로 실행하는 쿠버네티스 클러스터
+  - API 서버: 실거래 조회, 대시보드 지표, 회원·즐겨찾기 API와 사용자 웹 페이지를 함께 제공하는 서버
+  - Airflow: 오픈API 데이터를 매일 수집·정제·적재하고 시장 지표를 계산하는 파이프라인. UI는 외부에 열지 않고 port-forward로만 접속한다
+  - AWS Load Balancer Controller: API 서버 파드 IP를 ALB 타깃그룹에 등록하는 컨트롤러
+- RDS PostgreSQL: 서비스 데이터(prop_trend)와 Airflow 메타데이터(airflow)를 저장하는 데이터베이스. 외부에서 닿지 않는 Private Subnet에 둔다
+- Public Subnet: 노드가 NAT Gateway 없이 공인 IP로 오픈API와 ECR에 나가도록 노드와 ALB를 두는 서브넷
+- ECR: API 서버와 Airflow 컨테이너 이미지 저장소
+- S3: Terraform state 저장소
+
+로컬에서는 같은 구성을 Docker Compose 또는 kind(`k8s/kind.sh`)로 띄운다. 이때 DB는 컨테이너 PostgreSQL이다.
 
 ## 핵심 기능
 
@@ -37,6 +87,19 @@ docker compose up -d
 
 - API 서버: <http://localhost:8000>
 - PostgreSQL: `localhost:5432`
+
+### kind 클러스터
+
+kind로 컨트롤 플레인 1개, 워커 1개짜리 로컬 쿠버네티스 클러스터를 띄운다. 설정은 `k8s/kind-config.yaml`에 있다.
+
+```bash
+# 실행
+kind create cluster --config k8s/kind-config.yaml
+kubectl get nodes --context kind-prop-trend
+
+# 종료
+kind delete cluster --name prop-trend
+```
 
 ## 프로젝트 이슈
 

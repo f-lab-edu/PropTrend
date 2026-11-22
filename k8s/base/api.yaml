@@ -1,0 +1,66 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  labels:
+    app: api
+spec:
+  # 기동할 때 create_tables()로 스키마를 만든다. 여러 개가 동시에 뜨면 같은 DDL이 겹치므로 하나로 둔다.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # 이미지의 USER가 이름(appuser)이라 kubelet이 root가 아닌지 확인하지 못한다. api/Dockerfile의 UID를 적는다.
+        runAsUser: 10001
+      containers:
+        - name: api
+          # 이름만 적는다. 레지스트리와 태그는 overlay의 images가 바꾼다.
+          image: prop-trend-api
+          ports:
+            - name: http
+              containerPort: 8000
+          env:
+            - name: TZ
+              value: Asia/Seoul
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-db
+                  key: DATABASE_URL
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            # DB 접속이 늦어 기동이 길어져도 준비 전에 재시작하지 않게 한다.
+            initialDelaySeconds: 20
+            periodSeconds: 30
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              memory: 512Mi
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+spec:
+  selector:
+    app: api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http

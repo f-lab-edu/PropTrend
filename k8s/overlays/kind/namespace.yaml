@@ -1,0 +1,5 @@
+# EKS에서는 Terraform이 네임스페이스와 그 안의 Secret을 함께 만든다. kind에서만 여기서 만든다.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prop-trend

@@ -1,0 +1,7 @@
+# 이미지에는 dags/만 들어간다. 나머지는 빌드 컨텍스트로 보낼 필요가 없고, .env는 비밀값이다.
+.env
+.venv/
+tests/
+.pytest_cache/
+.ruff_cache/
+**/__pycache__/

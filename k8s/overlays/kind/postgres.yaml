@@ -1,0 +1,58 @@
+# 서비스 DB와 Airflow 메타 DB를 함께 담는다. EKS에서 RDS 인스턴스 하나에 DB 두 개를 두는 구성과 맞춘다.
+# 실습용이라 데이터는 emptyDir에 두고, 파드가 다시 뜨면 비어 있다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  # 같은 데이터 디렉터리를 두 프로세스가 쓰지 않게 새 파드는 이전 파드가 내려간 뒤에 뜬다.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:18
+          ports:
+            - name: postgres
+              containerPort: 5432
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              value: postgres
+            - name: POSTGRES_DB
+              value: prop_trend
+            - name: TZ
+              value: Asia/Seoul
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "prop_trend"]
+            periodSeconds: 5
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+spec:
+  selector:
+    app: postgres
+  ports:
+    - name: postgres
+      port: 5432
+      targetPort: postgres

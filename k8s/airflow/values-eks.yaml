@@ -1,0 +1,4 @@
+# EKS용. ECR 이미지는 노드 역할의 권한으로 받으므로 imagePullSecrets가 필요 없다.
+images:
+  airflow:
+    pullPolicy: Always

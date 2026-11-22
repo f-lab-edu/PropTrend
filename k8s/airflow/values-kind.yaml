@@ -1,0 +1,17 @@
+# kind용. 로컬 노드에는 base 요청량을 다 채울 자원이 없을 수 있어 낮춘다.
+# 빈 맵({})은 Helm이 base와 합쳐 원래 값이 남고, 지우기만 하면 memory limit이 요청량이 되므로 값을 적는다.
+apiServer:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 512Mi
+scheduler:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 512Mi
+dagProcessor:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi

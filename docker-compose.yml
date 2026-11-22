@@ -19,7 +19,10 @@ services:
       retries: 5
 
   api:
-    build: ./api
+    build:
+      context: ./api
+      additional_contexts:
+        public: ./public
     container_name: prop-trend-api
     restart: unless-stopped
     # api/.env는 읽지 않는다. 오픈API 인증키는 파이프라인만 쓰고, 접속 주소는 아래에서 준다.
@@ -27,8 +30,7 @@ services:
       # 컨테이너 안의 localhost는 자기 자신이므로 컨테이너 네트워크 주소를 쓴다.
       DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/prop_trend
       TZ: Asia/Seoul
-      PUBLIC_DIR: /app/public
-    # 빌드 컨텍스트가 ./api라 루트의 public/은 이미지에 들어가지 않으므로 마운트해서 서빙한다.
+    # 이미지에도 public/이 들어 있지만, 마운트해 두면 JS를 고칠 때 다시 빌드하지 않아도 된다.
     volumes:
       - ./public:/app/public:ro
     ports:
