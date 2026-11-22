@@ -56,7 +56,7 @@ echo "==> jscpd (중복 코드)"
 npx --ignore-scripts --yes "jscpd@${JSCPD_VERSION}" . || status=1
 
 echo "==> shellcheck (셸 스크립트)"
-uvx --no-build --from "shellcheck-py==${SHELLCHECK_VERSION}" shellcheck lint.sh || status=1
+uvx --no-build --from "shellcheck-py==${SHELLCHECK_VERSION}" shellcheck lint.sh .claude/hooks/check-python.sh || status=1
 
 echo "==> hadolint (Dockerfile)"
 if command -v docker >/dev/null 2>&1; then
