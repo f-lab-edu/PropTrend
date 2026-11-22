@@ -1,0 +1,14 @@
+# Terraform이 만든 ALB 타깃그룹에 api 파드 IP를 등록한다. 컨트롤러가 ALB를 직접 만들게 하면(Ingress)
+# Terraform이 그 주소를 몰라 CloudFront origin으로 쓸 수 없고, destroy 때 남은 ALB가 VPC 삭제를 막는다.
+apiVersion: elbv2.k8s.aws/v1beta1
+kind: TargetGroupBinding
+metadata:
+  name: api
+spec:
+  serviceRef:
+    name: api
+    port: 80
+  # eks.sh가 terraform output의 값으로 바꾼다.
+  targetGroupARN: TARGET_GROUP_ARN
+  targetType: ip
+  # networking을 비워 둬 컨트롤러가 보안그룹 규칙을 건드리지 않게 한다. ALB → 노드 규칙은 Terraform이 관리한다.

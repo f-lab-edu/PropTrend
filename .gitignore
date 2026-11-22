@@ -10,6 +10,7 @@ _workspace/
 .DS_Store
 .claude/.check-python-*
 k8s/.deploy.*/
+infra/.image-tag
 .terraform/
 *.tfstate
 *.tfstate.*
