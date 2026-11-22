@@ -14,3 +14,6 @@ RUN pip install --no-cache-dir --only-binary :all: \
     "defusedxml==0.7.1" \
     "requests==2.34.2" \
     "requests-toolbelt==1.0.0"
+
+# 쿠버네티스에는 compose처럼 호스트의 dags/를 마운트할 곳이 없어 이미지에 넣는다. compose는 이 위에 마운트해 편집을 바로 반영한다.
+COPY --chown=airflow:0 dags/ /opt/airflow/dags/
