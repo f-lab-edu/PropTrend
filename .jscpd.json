@@ -11,6 +11,7 @@
     "**/__pycache__/**",
     "**/.ruff_cache/**",
     "**/results/**",
-    "api/src/model/raw.py"
+    "api/src/model/raw.py",
+    "api/migrations/versions/**"
   ]
 }

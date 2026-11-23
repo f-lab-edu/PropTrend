@@ -5,7 +5,7 @@ metadata:
   labels:
     app: api
 spec:
-  # 기동할 때 create_tables()로 스키마를 만든다. 여러 개가 동시에 뜨면 같은 DDL이 겹치므로 하나로 둔다.
+  # 파드마다 initContainer가 마이그레이션을 돈다. 여러 개가 동시에 뜨면 같은 DDL이 겹치므로 하나로 둔다.
   replicas: 1
   selector:
     matchLabels:
@@ -19,6 +19,17 @@ spec:
         runAsNonRoot: true
         # 이미지의 USER가 이름(appuser)이라 kubelet이 root가 아닌지 확인하지 못한다. api/Dockerfile의 UID를 적는다.
         runAsUser: 10001
+      # 스키마를 마지막 리비전으로 올린 뒤에 api를 띄운다. 실패하면 파드가 준비되지 않아 옛 파드가 계속 받는다.
+      initContainers:
+        - name: migrate
+          image: prop-trend-api
+          command: ["alembic", "upgrade", "head"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-db
+                  key: DATABASE_URL
       containers:
         - name: api
           # 이름만 적는다. 레지스트리와 태그는 overlay의 images가 바꾼다.
