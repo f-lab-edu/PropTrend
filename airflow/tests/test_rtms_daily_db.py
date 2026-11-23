@@ -50,23 +50,6 @@ TEST_DATABASE_URL = os.environ.get(
     "DAG_TEST_DATABASE_URL", "postgresql://postgres:postgres@localhost:5432/prop_trend_airflow_test"
 )
 
-# DAG는 api 모델을 import하지 않으므로 스키마는 api 가상환경에서 모델로 만든다. 테스트에 DDL을 따로 두면
-# 모델이 바뀌어도 테스트는 옛 스키마로 통과한다.
-SCHEMA_SCRIPT = """
-import asyncio, os
-from sqlalchemy.ext.asyncio import create_async_engine
-from src.model import Base
-
-async def main():
-    engine = create_async_engine(os.environ["SCHEMA_DATABASE_URL"])
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
-    await engine.dispose()
-
-asyncio.run(main())
-"""
-
 TABLES = (
     "rtms_raw_items",
     "legal_dong_code_raw_items",
@@ -98,13 +81,21 @@ def database_url() -> str:
         if cursor.fetchone() is None:
             cursor.execute(f'CREATE DATABASE "{database}"')
 
+    # 리비전 사이에 바뀐 테이블과 alembic_version까지 남김없이 지우려고 스키마를 통째로 다시 만든다.
+    with closing(psycopg2.connect(TEST_DATABASE_URL)) as connection, closing(connection.cursor()) as cursor:
+        cursor.execute("DROP SCHEMA public CASCADE")
+        cursor.execute("CREATE SCHEMA public")
+        connection.commit()
+
     uv = shutil.which("uv")
     assert uv is not None, "스키마를 만들려면 uv가 필요하다"
+    # DAG는 api 모델을 import하지 않으므로 스키마는 api 가상환경에서 운영과 같은 마이그레이션으로 만든다.
+    # 테스트에 DDL을 따로 두면 모델이 바뀌어도 테스트는 옛 스키마로 통과한다.
     # 이 테스트를 airflow 가상환경에서 돌리고 있으므로, 물려받은 VIRTUAL_ENV를 지워야 uv가 api 가상환경을 쓴다.
     env = {key: value for key, value in os.environ.items() if key != "VIRTUAL_ENV"}
-    env["SCHEMA_DATABASE_URL"] = TEST_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
+    env["DATABASE_URL"] = TEST_DATABASE_URL.replace("postgresql://", "postgresql+asyncpg://", 1)
     subprocess.run(  # noqa: S603 - 인자는 이 모듈의 상수뿐이다.
-        [uv, "run", "--frozen", "--no-build", "python", "-c", SCHEMA_SCRIPT],
+        [uv, "run", "--frozen", "--no-build", "alembic", "upgrade", "head"],
         cwd=API_DIR,
         env=env,
         check=True,

@@ -16,6 +16,9 @@ COPY pyproject.toml uv.lock ./
 RUN uv sync --locked --no-dev --no-build
 
 COPY src ./src
+# 스키마는 API가 뜨기 전에 같은 이미지로 `alembic upgrade head`를 돌려 맞춘다.
+COPY alembic.ini ./
+COPY migrations ./migrations
 # 웹 페이지는 저장소 루트의 public/에 있어 빌드 컨텍스트(api/) 밖이다. 이름 붙인 컨텍스트로 받는다.
 #   docker build --build-context public=public api
 # 쿠버네티스에는 compose처럼 호스트 디렉터리를 마운트할 곳이 없어 이미지에 넣어야 한다.

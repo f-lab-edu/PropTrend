@@ -21,7 +21,8 @@
 - 스키마는 `PropTrendCoreModel`을 상속하고 이름은 `XxxRequest`, `XxxResponse`, `XxxListResponse`, `XxxQuery`로 짓습니다.
 - 목록 응답은 `ListResponse`(`items`), limit·offset 페이지 응답은 `PageResponse`(`items`·`total`·`limit`·`offset`)를 상속합니다.
 - 시각 컬럼은 `DateTime(timezone=True)`로 정의합니다.
-- 마이그레이션 도구 없이 기동 시 `create_all`로 없는 테이블만 만듭니다. 모델의 컬럼·인덱스를 바꾸면 기존 DB에 적용할 `ALTER` 문을 함께 안내합니다.
+- 스키마는 Alembic(`api/migrations/`)으로 관리합니다. 모델의 테이블·컬럼·인덱스를 바꾸면 `uv run alembic revision --autogenerate -m "..."`로 리비전을 만들고, 생성된 `upgrade`·`downgrade`를 검토해 함께 커밋합니다. 리비전이 빠지면 `tests/test_migrations.py`가 실패합니다.
+- autogenerate가 잡지 못하는 변경(이름 바꾸기, CHECK 제약, 데이터 옮기기)은 리비전에 직접 적습니다. 이미 적용된 리비전은 고치지 않고 새 리비전을 더합니다.
 
 ### Test instructions
 

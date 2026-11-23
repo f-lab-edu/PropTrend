@@ -11,8 +11,6 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from .model import Base
-
 DEFAULT_DATABASE_URL = "postgresql+asyncpg://postgres:postgres@localhost:5432/prop_trend"
 
 _engine: AsyncEngine | None = None
@@ -40,12 +38,6 @@ async def session_scope() -> AsyncGenerator[AsyncSession]:
     """데이터베이스 세션 제공 함수"""
     async with get_session_factory()() as session, session.begin():
         yield session
-
-
-async def create_tables() -> None:
-    """모델 메타데이터에 정의된 테이블 중 없는 것을 만든다."""
-    async with get_engine().begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
 
 
 async def dispose_engine() -> None:

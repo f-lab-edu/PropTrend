@@ -18,6 +18,20 @@ services:
       timeout: 5s
       retries: 5
 
+  # API를 띄우기 전에 스키마를 마지막 리비전으로 올리고 끝난다.
+  migrate:
+    build:
+      context: ./api
+      additional_contexts:
+        public: ./public
+    container_name: prop-trend-migrate
+    command: ["alembic", "upgrade", "head"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/prop_trend
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   api:
     build:
       context: ./api
@@ -39,6 +53,9 @@ services:
       postgres:
         # 기동 직후엔 아직 접속을 못 받으므로 healthcheck 통과를 기다린다.
         condition: service_healthy
+      # 마이그레이션이 실패하면 옛 스키마로 뜨지 않게 성공으로 끝나야 띄운다.
+      migrate:
+        condition: service_completed_successfully
     healthcheck:
       # slim 이미지에 curl이 없어 파이썬으로 확인한다.
       test:
