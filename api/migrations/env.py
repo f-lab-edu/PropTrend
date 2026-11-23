@@ -36,7 +36,8 @@ def run_migrations_offline() -> None:
 
 def do_run_migrations(connection: Connection) -> None:
     """주어진 커넥션으로 마이그레이션을 실행한다."""
-    context.configure(connection=connection, target_metadata=target_metadata)
+    # server_default 비교는 기본값이 꺼져 있어, 켜지 않으면 기본값만 바꾼 모델 변경을 check가 놓친다.
+    context.configure(connection=connection, target_metadata=target_metadata, compare_server_default=True)
     with context.begin_transaction():
         context.run_migrations()
 
