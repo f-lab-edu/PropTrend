@@ -41,3 +41,9 @@ class MarketSnapshotNotReadyError(PropTrendError):
     """정기 갱신이 시장 지표를 아직 한 번도 계산하지 않았다."""
 
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+
+
+class NotificationNotFoundError(PropTrendError):
+    """요청한 id의 알림이 없거나 로그인한 사용자의 알림이 아니다."""
+
+    status_code = status.HTTP_404_NOT_FOUND
