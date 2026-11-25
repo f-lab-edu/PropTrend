@@ -59,6 +59,7 @@ deploy() {
         path: /spec/targetGroupARN
         value: $tg"
     kubectl --context "$CTX" -n prop-trend rollout status deploy/api --timeout=300s
+    kubectl --context "$CTX" -n prop-trend rollout status deploy/notification-worker --timeout=300s
 
     install_airflow "$airflow_repo" "$tag" eks
 

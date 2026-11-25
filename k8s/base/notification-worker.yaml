@@ -1,0 +1,44 @@
+# 정기 갱신이 남긴 신규 거래 이벤트를 읽어 인앱 알림을 만드는 워커. API와 같은 이미지로 진입점만 바꾼다.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: notification-worker
+  labels:
+    app: notification-worker
+spec:
+  # 이벤트를 FOR UPDATE SKIP LOCKED로 나눠 가져가므로 늘려도 같은 이벤트를 두 번 처리하지 않는다.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: notification-worker
+  template:
+    metadata:
+      labels:
+        app: notification-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        # 이미지의 USER가 이름(appuser)이라 kubelet이 root가 아닌지 확인하지 못한다. api/Dockerfile의 UID를 적는다.
+        runAsUser: 10001
+      # SIGTERM을 받으면 처리 중인 묶음을 마치고 나간다. 묶음 하나는 수 초 안에 끝난다.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: worker
+          # 이름만 적는다. 레지스트리와 태그는 overlay의 images가 바꾼다.
+          image: prop-trend-api
+          # 스키마는 api 파드의 initContainer가 올린다. 그 전에 뜨면 대기열 조회가 실패하고 재시도로 버틴다.
+          command: ["python", "-m", "src.notification_worker"]
+          env:
+            - name: TZ
+              value: Asia/Seoul
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-db
+                  key: DATABASE_URL
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              memory: 256Mi

@@ -70,5 +70,24 @@ services:
       retries: 3
       start_period: 10s
 
+  # 정기 갱신이 남긴 신규 거래 이벤트를 읽어 인앱 알림을 만든다. API와 같은 이미지로 진입점만 바꾼다.
+  worker:
+    build:
+      context: ./api
+      additional_contexts:
+        public: ./public
+    container_name: prop-trend-worker
+    restart: unless-stopped
+    command: ["python", "-m", "src.notification_worker"]
+    environment:
+      DATABASE_URL: postgresql+asyncpg://postgres:postgres@postgres:5432/prop_trend
+      TZ: Asia/Seoul
+    depends_on:
+      postgres:
+        condition: service_healthy
+      # 대기열 테이블이 생긴 뒤에 뜬다.
+      migrate:
+        condition: service_completed_successfully
+
 volumes:
   postgres-data:
