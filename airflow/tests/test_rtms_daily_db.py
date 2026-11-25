@@ -37,6 +37,7 @@ from rtms.tasks import (
     collect_rtms,
     plan_rtms_chunks,
     process_regions,
+    publish_transaction_events,
     refresh_legal_dong,
     refresh_price_movers,
 )
@@ -59,6 +60,7 @@ TABLES = (
     "regions",
     "market_price_movers",
     "market_snapshots",
+    "transaction_events",
 )
 
 # 2026년 10월 회차라 최근 두 달(202610, 202609)이 갱신 범위다.
@@ -243,9 +245,9 @@ def run_check(run: CollectRun) -> dict[str, int]:
     return check_rtms.function("apart_sale", ti=run.ti)
 
 
-def run_process(api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
+def run_process(api_id: str, units: list[tuple[str, str]], *, notify: bool = False) -> dict[str, int]:
     with closing(PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID).get_conn()) as task_conn:
-        return process_units(task_conn, api_id, units)
+        return process_units(task_conn, api_id, units, notify=notify)
 
 
 OCT, SEP = "202610", "202609"
@@ -438,7 +440,7 @@ def test_process_replaces_only_its_month_sigungu_and_type(conn: Any) -> None:
 
     summary = run_process("apart_sale", [("11110", "202612")])
 
-    assert summary == {"units": 1, "succeeded": 1, "failed": 0, "loaded": 1, "complexes": 0}
+    assert summary == {"units": 1, "succeeded": 1, "failed": 0, "loaded": 1, "complexes": 0, "new_transactions": 0}
     assert execute(
         conn,
         "SELECT property_type, sido_code || sigungu_code, deal_date, deal_amount FROM sale_transactions "
@@ -515,6 +517,119 @@ def test_complexes_follow_latest_name_and_merge_null_keys(conn: Any) -> None:
     ]
     # 같은 값으로 다시 돌면 고치지 않는다. 매일 덮으면 updated_at과 행 버전만 쌓인다.
     assert execute(conn, updated_at_sql) == updated_at
+
+
+APT_UNIT = ("11110", OCT)
+
+
+def apt_sale(day: int, amount: str, **overrides: str) -> dict[str, str]:
+    """청운현대(11110-1) 아파트 매매 응답 item 하나."""
+    return sale("11110", date(2026, 10, day), amount, **({"aptNm": "청운현대", "aptSeq": "11110-1"} | overrides))
+
+
+def apt_rent(day: int, deposit: str) -> dict[str, str]:
+    """청운현대(11110-1) 아파트 전세 응답 item 하나."""
+    return {
+        "sggCd": "11110",
+        "dealYear": "2026",
+        "dealMonth": "10",
+        "dealDay": str(day),
+        "deposit": deposit,
+        "monthlyRent": "0",
+        "umdNm": "청운동",
+        "jibun": "1-1",
+        "aptNm": "청운현대",
+        "aptSeq": "11110-1",
+    }
+
+
+def transaction_events(conn: Any) -> list[tuple[Any, ...]]:
+    """신규 거래 이벤트를 (유형, 단지명, 매매 수, 전월세 수, 열림 여부)로 읽는다."""
+    return execute(
+        conn,
+        "SELECT complexes.property_type, complexes.building_name, sale_count, rent_count, available_at IS NOT NULL "
+        "FROM transaction_events JOIN complexes ON complexes.id = transaction_events.complex_id "
+        "ORDER BY transaction_events.id",
+    )
+
+
+def test_new_transactions_are_counted_against_replaced_rows(conn: Any) -> None:
+    first = apt_sale(1, "10,000", floor="3")
+    put_bronze(conn, "apart_sale", APT_UNIT, first)
+    run_process("apart_sale", [APT_UNIT])
+    # 알림을 끈 정제는 비교 없이 갈아끼우기만 한다.
+    assert transaction_events(conn) == []
+
+    put_bronze(
+        conn,
+        "apart_sale",
+        APT_UNIT,
+        # 등기·해제처럼 신고 뒤에 채워지는 값이 바뀌어도 같은 거래다.
+        first | {"rgstDate": "26.10.20", "cdealType": "O", "cdealDay": "26.10.21"},
+        # 값이 같은 거래가 하나 더 신고되면 신규다.
+        first,
+        apt_sale(2, "20,000"),
+        # 처음 보인 때 이미 해제된 거래는 알리지 않는다.
+        apt_sale(3, "30,000", cdealType="O"),
+        # 단지 일련번호가 없으면 단지를 특정할 수 없다.
+        apt_sale(4, "40,000", aptSeq=""),
+    )
+    summary = run_process("apart_sale", [APT_UNIT], notify=True)
+
+    assert summary["loaded"] == 5
+    assert summary["new_transactions"] == 2
+    assert transaction_events(conn) == [("APT", "청운현대", 2, 0, False)]
+
+    # 같은 bronze로 다시 돌면(재시도·Clear) 차이가 없어 건수가 겹치지 않는다.
+    run_process("apart_sale", [APT_UNIT], notify=True)
+    assert transaction_events(conn) == [("APT", "청운현대", 2, 0, False)]
+
+
+def test_sale_and_rent_share_open_event_until_published(conn: Any) -> None:
+    put_bronze(conn, "apart_sale", APT_UNIT, apt_sale(1, "10,000"))
+    put_bronze(conn, "apart_rent", APT_UNIT, apt_rent(1, "5,000"), apt_rent(2, "6,000"))
+    run_process("apart_sale", [APT_UNIT], notify=True)
+    run_process("apart_rent", [APT_UNIT], notify=True)
+
+    # 같은 회차의 매매·전월세는 단지의 열린 행 하나에 모인다.
+    assert transaction_events(conn) == [("APT", "청운현대", 1, 2, False)]
+    assert publish_transaction_events.function() == {"published": 1}
+
+    # 발행 뒤의 신규 거래는 이미 열린 행에 더하지 않고 새 행을 연다. 워커가 처리한 행에 더하면 건수를 잃는다.
+    put_bronze(conn, "apart_sale", APT_UNIT, apt_sale(1, "10,000"), apt_sale(5, "50,000"))
+    run_process("apart_sale", [APT_UNIT], notify=True)
+    assert transaction_events(conn) == [("APT", "청운현대", 1, 2, True), ("APT", "청운현대", 1, 0, False)]
+
+
+def test_only_complex_types_leave_events(conn: Any) -> None:
+    officetel_unit, row_house_unit = ("11140", OCT), ("11110", OCT)
+    # 지번이 빈 오피스텔도 NULL끼리 같은 단지로 찾는다.
+    officetel = sale("11140", date(2026, 10, 1), "1", offiNm="오피", jibun="")
+    put_bronze(conn, "officetel_sale", officetel_unit, officetel)
+    put_bronze(conn, "multiflex_sale", row_house_unit, sale("11110", date(2026, 10, 1), "1", mhouseNm="연립"))
+    run_process("officetel_sale", [officetel_unit])
+    # 연립다세대는 단지가 없어 즐겨찾기 대상이 아니다.
+    run_process("multiflex_sale", [row_house_unit], notify=True)
+    assert transaction_events(conn) == []
+
+    put_bronze(conn, "officetel_sale", officetel_unit, officetel, officetel | {"dealDay": "2"})
+    run_process("officetel_sale", [officetel_unit], notify=True)
+
+    assert transaction_events(conn) == [("OFFICETEL", "오피", 1, 0, False)]
+
+
+def test_new_transactions_over_limit_are_not_notified(
+    conn: Any, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    monkeypatch.setattr(rtms.load, "NEW_TRANSACTION_LIMIT", 1)
+    put_bronze(conn, "apart_sale", APT_UNIT, apt_sale(1, "10,000"), apt_sale(2, "20,000"))
+
+    summary = run_process("apart_sale", [APT_UNIT], notify=True)
+
+    # 정제는 그대로 반영하고 알림만 막는다.
+    assert (summary["loaded"], summary["new_transactions"]) == (2, 0)
+    assert transaction_events(conn) == []
+    assert "상한" in caplog.text
 
 
 def test_regions_are_replaced_from_legal_dong_bronze(conn: Any) -> None:

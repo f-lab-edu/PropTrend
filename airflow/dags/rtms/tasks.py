@@ -19,6 +19,7 @@ from rtms.db import (
     MARKET_SNAPSHOT_UPSERT_SQL,
     PROP_TREND_DB_CONN_ID,
     REGION_INSERT_SQL,
+    TRANSACTION_EVENT_PUBLISH_SQL,
 )
 from rtms.load import check_fields, collect_units, process_units, rtms_units
 from rtms.open_api import DATA_GO_KR_CONN_ID, OPEN_API_RETRIES, fetch_legal_dong_rows, get_service_key
@@ -138,7 +139,24 @@ def process_rtms(api_id: str, **context: Any) -> dict[str, int]:
     hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
     units = rtms_units(hook, context)
     with closing(cast("Any", hook.get_conn())) as conn:
-        return process_units(conn, api_id, units)
+        return process_units(conn, api_id, units, notify=context["params"]["notify"])
+
+
+# 정제가 실패·건너뜀이어도 돈다. 정제는 단위마다 커밋하므로 성공한 단위가 남긴 이벤트는 회차 결과와 상관없이 알린다.
+@task(trigger_rule=TriggerRule.ALL_DONE, execution_timeout=timedelta(minutes=5))
+def publish_transaction_events() -> dict[str, int]:
+    """회차 동안 단지별로 모은 신규 거래 이벤트를 알림 워커가 가져가도록 연다."""
+    # 정제마다 바로 열면 같은 단지의 매매·전월세가 서로 다른 알림으로 갈라지고, 사용자가 읽은 알림 뒤로 같은 회차의
+    # 알림이 또 생긴다. 회차가 끝난 뒤 한 번에 열어 단지마다 알림 하나로 모은다.
+    hook = PostgresHook(postgres_conn_id=PROP_TREND_DB_CONN_ID)
+    with closing(hook.get_conn()) as conn:
+        with closing(conn.cursor()) as cursor:
+            cursor.execute(TRANSACTION_EVENT_PUBLISH_SQL)
+            published = cursor.rowcount
+        conn.commit()
+
+    log.info("신규 거래 이벤트 %d건 발행", published)
+    return {"published": published}
 
 
 # 법정동코드 수집이 실패·건너뜀이어도 남아 있는 bronze로 다시 만든다. 지난번 지역 가공이 실패했다면 여기서 복구된다.

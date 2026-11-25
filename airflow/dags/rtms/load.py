@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from collections import Counter
 from contextlib import closing
 from datetime import date
 from typing import Any
@@ -18,14 +19,18 @@ from requests_toolbelt.adapters.socket_options import TCPKeepAliveAdapter
 from rtms.apis import RTMS_APIS
 from rtms.db import (
     COMPLEX_COLUMNS,
+    COMPLEX_ID_SQL,
     COMPLEX_KEY_COLUMNS,
     COMPLEX_UPSERT_SQL,
     RENT_COLUMNS,
     RENT_DELETE_SQL,
+    RENT_FINGERPRINTS,
     RENT_INSERT_SQL,
     SALE_COLUMNS,
     SALE_DELETE_SQL,
+    SALE_FINGERPRINTS,
     SALE_INSERT_SQL,
+    TRANSACTION_EVENT_UPSERT_SQL,
 )
 from rtms.open_api import DATA_GO_KR_CONN_ID, OPEN_API_RETRIES, fetch_rtms_items, get_service_key
 from rtms.preprocess import preprocess_rtms
@@ -37,6 +42,10 @@ log = logging.getLogger(__name__)
 RTMS_UNIT_INTERVAL = 0.1
 # 회차 실패 메시지에 실을 좌표 수. 전량은 태스크 로그에 단위마다 남는다.
 FAILED_UNITS_IN_MESSAGE = 20
+# 단위 하나의 신규 거래가 이보다 많으면 알리지 않는다. 가장 큰 단위도 한 달 거래가 약 4,000건이라(2026-11-24 기준
+# 아파트 전월세 41360) 하루치가 넘을 수 없는 양이다. 빈 응답으로 비워진 단위가 다음 날 통째로 돌아오거나
+# 전처리 규칙을 고쳐 지문이 바뀌면 이미 있던 거래가 전부 신규로 잡히는데, 그 알림을 막는다.
+NEW_TRANSACTION_LIMIT = 1000
 
 
 def sigungu_codes(hook: PostgresHook) -> list[str]:
@@ -75,6 +84,50 @@ def upsert_complexes(cursor: Any, property_type: str, rows: list[dict[str, Any]]
             [tuple(row[column] for column in COMPLEX_COLUMNS) for _, row in ordered],
         )
     return len(ordered)
+
+
+def record_new_transactions(
+    cursor: Any, api_id: str, lawd_cd: str, rows: list[dict[str, Any]], previous: Counter[tuple[Any, ...]]
+) -> int:
+    """단위의 이전 정제 행에 없던 거래를 단지별로 세어 열린 신규 거래 이벤트에 더한다."""
+    api = RTMS_APIS[api_id]
+    columns, _ = (SALE_FINGERPRINTS if api.is_sale else RENT_FINGERPRINTS)[api.property_type]
+    key_size = len(COMPLEX_KEY_COLUMNS[api.property_type])
+    counts: Counter[tuple[Any, ...]] = Counter()
+    for row in rows:
+        fingerprint = tuple(row[column] for column in columns)
+        # 같은 층·면적·금액의 거래가 같은 날 실제로 여러 건일 수 있어 집합이 아니라 개수로 지운다.
+        if previous[fingerprint] > 0:
+            previous[fingerprint] -= 1
+            continue
+        # 해제는 알리지 않는다. 처음 보인 때 이미 해제된 거래다.
+        if row.get("cancel_deal_type") == "O":
+            continue
+        key = fingerprint[:key_size]
+        # 상세 자료로 재수집되기 전의 아파트 매매는 단지를 특정할 수 없다. 일련번호가 채워지는 날 신규로 잡힌다.
+        if api.property_type == "APT" and key[0] is None:
+            continue
+        counts[key] += 1
+
+    total = counts.total()
+    if total > NEW_TRANSACTION_LIMIT:
+        log.warning("%s:%s 신규 거래 %d건이 상한을 넘어 알리지 않는다", api_id, lawd_cd, total)
+        return 0
+    if not total:
+        return 0
+    cursor.execute(
+        COMPLEX_ID_SQL[api.property_type],
+        {"serials": [key[0] for key in counts], "sido": lawd_cd[:2], "sigungu": lawd_cd[2:]},
+    )
+    # 단지는 같은 트랜잭션에서 방금 upsert했다. 없으면 키 규칙이 어긋난 것이라 단위째 실패시킨다.
+    complex_ids = {tuple(key): complex_id for complex_id, *key in cursor.fetchall()}
+    # 매매·전월세 정제가 같은 단지의 열린 행을 동시에 고칠 때 행 락을 서로 다른 순서로 잡지 않게 id 순으로 넣는다.
+    events = sorted((complex_ids[key], count) for key, count in counts.items())
+    cursor.executemany(
+        TRANSACTION_EVENT_UPSERT_SQL,
+        [(complex_id, count, 0) if api.is_sale else (complex_id, 0, count) for complex_id, count in events],
+    )
+    return total
 
 
 def collect_units(conn: Any, api_id: str, units: list[tuple[str, str]], seen: set[str]) -> dict[str, int]:
@@ -162,15 +215,20 @@ def check_fields(api_id: str, seen: set[str]) -> None:
         raise AirflowFailException(f"{api_id}: 기준선에 있던 필드가 응답에 없다 {sorted(missing)}")
 
 
-def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[str, int]:
-    """bronze에 남은 응답으로 API 하나의 단위마다 정제 테이블을 갈아끼운다."""
+def process_units(conn: Any, api_id: str, units: list[tuple[str, str]], *, notify: bool = False) -> dict[str, int]:
+    """bronze에 남은 응답으로 API 하나의 단위마다 정제 테이블을 갈아끼운다. notify면 신규 거래 이벤트도 남긴다."""
     api = RTMS_APIS[api_id]
     delete_sql, insert_sql = (SALE_DELETE_SQL, SALE_INSERT_SQL) if api.is_sale else (RENT_DELETE_SQL, RENT_INSERT_SQL)
     columns = SALE_COLUMNS if api.is_sale else RENT_COLUMNS
+    # 즐겨찾기는 단지에만 걸 수 있어 단지가 있는 유형만 신규 거래를 가린다.
+    fingerprints = SALE_FINGERPRINTS if api.is_sale else RENT_FINGERPRINTS
+    fingerprint_delete_sql = (
+        fingerprints[api.property_type][1] if notify and api.property_type in fingerprints else None
+    )
     log.info("%s: silver %d단위", api_id, len(units))
 
     failed: list[str] = []
-    loaded = complexes = 0
+    loaded = complexes = new_transactions = 0
     for lawd_cd, deal_ymd in units:
         coordinate = f"{api_id}:{lawd_cd}:{deal_ymd}"
         year, month = int(deal_ymd[:4]), int(deal_ymd[4:])
@@ -185,7 +243,11 @@ def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
                 )
                 raw_rows = cursor.fetchall()
                 rows = [preprocess_rtms(api_id, raw_id, payload) for raw_id, payload in raw_rows]
-                cursor.execute(delete_sql, (api.property_type, lawd_cd[:2], lawd_cd[2:], month_start, month_end))
+                unit_params = (api.property_type, lawd_cd[:2], lawd_cd[2:], month_start, month_end)
+                # 거래 id는 갈아끼울 때마다 바뀌므로 신규 여부는 지우는 행의 지문과 새 행의 지문을 견줘 가린다.
+                # 비교와 이벤트가 정제와 한 트랜잭션이라, 재시도·Clear로 다시 돌면 차이가 없어 이벤트가 겹치지 않는다.
+                cursor.execute(fingerprint_delete_sql or delete_sql, unit_params)
+                previous = Counter(cursor.fetchall()) if fingerprint_delete_sql else None
                 cursor.executemany(
                     insert_sql,
                     [
@@ -199,6 +261,9 @@ def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
                 unit_complexes = (
                     upsert_complexes(cursor, api.property_type, rows) if api.property_type in COMPLEX_KEY_COLUMNS else 0
                 )
+                unit_new = (
+                    record_new_transactions(cursor, api_id, lawd_cd, rows, previous) if previous is not None else 0
+                )
             conn.commit()
         except Exception:
             # 같은 자리에서 또 터진다면 일시 오류가 아니라 전처리 로직 쪽이다. bronze는 그대로라 코드를 고친 뒤
@@ -209,6 +274,7 @@ def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
         else:
             loaded += len(rows)
             complexes += unit_complexes
+            new_transactions += unit_new
 
     summary = {
         "units": len(units),
@@ -216,6 +282,7 @@ def process_units(conn: Any, api_id: str, units: list[tuple[str, str]]) -> dict[
         "failed": len(failed),
         "loaded": loaded,
         "complexes": complexes,
+        "new_transactions": new_transactions,
     }
     log.info("%s: silver 갱신 종료 %s", api_id, summary)
     if failed:
