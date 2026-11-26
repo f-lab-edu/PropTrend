@@ -115,9 +115,18 @@ COMPLEX_ID_SQL = {
     "WHERE property_type = 'OFFICETEL' AND sido_code = %(sido)s AND sigungu_code = %(sigungu)s",
 }
 
-# 신규 거래를 가르는 지문. 같은 거래가 갱신마다 같은 값을 갖는 컬럼만 둔다. 해제여부·등기일자처럼 신고 뒤에 채워지는
-# 값과, 소급해 바뀌는 아파트 단지명은 넣지 않는다. 앞에 단지 키를 둬 신규 거래의 단지를 지문에서 바로 꺼낸다.
-SALE_FINGERPRINT_DEAL_COLUMNS = ("deal_date", "exclusive_use_area", "floor", "apartment_dong", "deal_amount")
+# 신규 거래를 가르는 지문. 같은 거래가 갱신마다 같은 값을 갖는 컬럼만 둔다. 등기일자처럼 신고 뒤에 채워지는 값과,
+# 소급해 바뀌는 아파트 단지명은 넣지 않는다. 앞에 단지 키를 둬 신규 거래의 단지를 지문에서 바로 꺼낸다.
+# 해제여부는 신고 뒤에 바뀌지만 넣는다. 빼면 해제된 거래와 같은 값으로 다시 신고된 거래가 응답 순서에 따라 서로의
+# 짝을 가져가 신규 여부가 갈린다. 해제로 바뀐 거래는 짝이 없어도 해제라 알리지 않으므로 결과는 같다.
+SALE_FINGERPRINT_DEAL_COLUMNS = (
+    "deal_date",
+    "exclusive_use_area",
+    "floor",
+    "apartment_dong",
+    "deal_amount",
+    "cancel_deal_type",
+)
 RENT_FINGERPRINT_DEAL_COLUMNS = (
     "deal_date",
     "exclusive_use_area",

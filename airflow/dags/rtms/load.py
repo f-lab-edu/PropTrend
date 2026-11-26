@@ -100,7 +100,7 @@ def record_new_transactions(
         if previous[fingerprint] > 0:
             previous[fingerprint] -= 1
             continue
-        # 해제는 알리지 않는다. 처음 보인 때 이미 해제된 거래다.
+        # 해제는 알리지 않는다. 처음 보인 때 이미 해제됐거나, 이전 정제 뒤에 해제로 바뀐 거래다.
         if row.get("cancel_deal_type") == "O":
             continue
         key = fingerprint[:key_size]

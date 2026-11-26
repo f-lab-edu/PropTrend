@@ -564,8 +564,8 @@ def test_new_transactions_are_counted_against_replaced_rows(conn: Any) -> None:
         conn,
         "apart_sale",
         APT_UNIT,
-        # 등기·해제처럼 신고 뒤에 채워지는 값이 바뀌어도 같은 거래다.
-        first | {"rgstDate": "26.10.20", "cdealType": "O", "cdealDay": "26.10.21"},
+        # 등기일자처럼 신고 뒤에 채워지는 값이 바뀌어도 같은 거래다.
+        first | {"rgstDate": "26.10.20"},
         # 값이 같은 거래가 하나 더 신고되면 신규다.
         first,
         apt_sale(2, "20,000"),
@@ -583,6 +583,28 @@ def test_new_transactions_are_counted_against_replaced_rows(conn: Any) -> None:
     # 같은 bronze로 다시 돌면(재시도·Clear) 차이가 없어 건수가 겹치지 않는다.
     run_process("apart_sale", [APT_UNIT], notify=True)
     assert transaction_events(conn) == [("APT", "청운현대", 2, 0, False)]
+
+
+@pytest.mark.parametrize("reverse", [False, True], ids=["canceled_first", "active_first"])
+def test_canceled_rows_match_only_canceled_rows(conn: Any, reverse: bool) -> None:
+    active, canceled = apt_sale(1, "10,000"), apt_sale(2, "20,000", cdealType="O", cdealDay="26.10.10")
+    put_bronze(conn, "apart_sale", APT_UNIT, active, canceled)
+    run_process("apart_sale", [APT_UNIT])
+
+    rows = [
+        # 정상이던 거래가 해제되고 같은 값으로 다시 신고됐다. 다시 신고된 거래는 이미 있던 거래다.
+        active | {"cdealType": "O", "cdealDay": "26.10.20"},
+        active,
+        # 이미 해제된 거래는 그대로고, 같은 값의 거래가 새로 신고됐다.
+        canceled,
+        apt_sale(2, "20,000"),
+    ]
+    put_bronze(conn, "apart_sale", APT_UNIT, *(reversed(rows) if reverse else rows))
+    summary = run_process("apart_sale", [APT_UNIT], notify=True)
+
+    # 응답 순서와 상관없이 해제 이후 새로 신고된 거래 하나만 신규다.
+    assert summary["new_transactions"] == 1
+    assert transaction_events(conn) == [("APT", "청운현대", 1, 0, False)]
 
 
 def test_sale_and_rent_share_open_event_until_published(conn: Any) -> None:
