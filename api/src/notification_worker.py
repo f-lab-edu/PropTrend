@@ -90,7 +90,8 @@ async def process_events(session_factory: async_sessionmaker[AsyncSession]) -> i
                         attempts=attempts + 1,
                         last_error=repr(error)[:ERROR_MESSAGE_LENGTH],
                         failed_at=func.now() if failed else None,
-                        available_at=func.now() + RETRY_BASE_DELAY * 2**attempts,
+                        # now()는 묶음 트랜잭션의 시작 시각이라, 묶음이 오래 걸리면 재시도 시각이 이미 지나 있다.
+                        available_at=func.clock_timestamp() + RETRY_BASE_DELAY * 2**attempts,
                     )
                 )
             else:
