@@ -94,7 +94,9 @@ async def process_events(session_factory: async_sessionmaker[AsyncSession]) -> i
                     )
                 )
             else:
-                log.info("신규 거래 이벤트 %d: 단지 %d, 알림 %d건", event_id, complex_id, created)
+                # 즐겨찾기한 사람이 없는 단지가 대부분이라 회차마다 수만 줄이 쌓여 알림을 만든 이벤트를 가린다.
+                level = logging.INFO if created else logging.DEBUG
+                log.log(level, "신규 거래 이벤트 %d: 단지 %d, 알림 %d건", event_id, complex_id, created)
     return len(claimed)
 
 
