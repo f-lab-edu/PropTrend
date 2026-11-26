@@ -1,4 +1,6 @@
-"""실거래 정기 갱신. 법정동코드와 실거래 8종의 오픈API 응답을 bronze·정제 테이블에 갈아끼우고 시장 지표를 계산한다."""
+"""실거래 정기 갱신. 법정동코드와 실거래 8종의 오픈API 응답을 bronze·정제 테이블에 갈아끼우고 시장 지표를 계산한다.
+
+정제에서 새로 보인 거래는 즐겨찾기 알림 대기열(transaction_events)에 남겨 회차 끝에 연다."""
 
 # 이 파일은 태스크 그래프만 선언한다. 오픈API 호출·전처리·SQL·적재 루프는 rtms 패키지에 기능별로 있다.
 from datetime import timedelta
@@ -13,6 +15,7 @@ from rtms.tasks import (
     plan_rtms_chunks,
     process_regions,
     process_rtms,
+    publish_transaction_events,
     refresh_legal_dong,
     refresh_price_movers,
 )
@@ -50,10 +53,18 @@ MAX_RTMS_MONTHS = 24
             title="기준 계약년월",
             description="YYYYMM. 비우면 회차 기준 달이다. 예: 202503과 갱신 개월 수 1이면 2025년 3월만 갈아끼운다",
         ),
+        # 신규 거래는 지우는 정제 행과 새 행을 견줘 가린다. 전처리 규칙을 고친 뒤의 재처리처럼 같은 거래의 값이
+        # 바뀌는 실행에서는 이미 있던 거래가 신규로 잡히므로 끈다.
+        "notify": Param(
+            True,
+            type="boolean",
+            title="즐겨찾기 알림",
+            description="정제에서 새로 보인 거래를 즐겨찾기한 사용자에게 알린다. 전처리 규칙을 바꾼 재처리에서는 끈다",
+        ),
     },
 )
 def rtms_daily() -> None:
-    """법정동코드와 지역 목록을 교체하고, API 8종을 묶음별로 bronze에 받아 정제한 뒤 시장 지표를 계산한다."""
+    """법정동코드와 지역 목록을 교체하고, API 8종을 bronze에 받아 정제한 뒤 시장 지표와 신규 거래 이벤트를 남긴다."""
     legal_dong = refresh_legal_dong()
     regions = process_regions()
     chunks = plan_rtms_chunks()
@@ -97,9 +108,13 @@ def rtms_daily() -> None:
         # DAG 실행 상태는 리프 태스크로 정해진다. summarize가 all_done으로 성공하면 상류 실패가 묻힌다.
         raise RuntimeError("갱신 태스크 중 실패한 것이 있다")
 
+    # 같은 단지의 매매·전월세를 알림 하나로 모으려고 모든 정제가 끝난 뒤 한 번에 연다.
+    events = publish_transaction_events()
+    processes >> events
+
     # bronze 요약을 check에서 꺼내므로 정제와 나란히 도는 check도 기다린다.
     [*checks, *processes] >> summarize()
-    [legal_dong, regions, chunks, *collects, *checks, *processes, price_movers] >> watcher()
+    [legal_dong, regions, chunks, *collects, *checks, *processes, price_movers, events] >> watcher()
 
 
 rtms_daily()

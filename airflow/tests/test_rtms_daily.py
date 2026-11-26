@@ -139,6 +139,20 @@ def test_base_ymd_param_rejects_malformed(dag: DAG, base_ymd: object) -> None:
         dag.params.get_param("base_ymd").resolve(base_ymd)
 
 
+def test_notify_param_defaults_to_on(dag: DAG) -> None:
+    # 정기 실행은 입력이 없으므로 기본값이 켜져 있어야 매일 알림이 나간다.
+    assert dag.params.get_param("notify").resolve() is True
+
+
+def test_publish_waits_for_every_process_task_even_if_they_fail(dag: DAG) -> None:
+    task = python_task(dag, "publish_transaction_events")
+
+    # 같은 단지의 매매·전월세 이벤트를 알림 하나로 모으려면 모든 정제가 끝난 뒤에 열어야 한다.
+    assert task.upstream_task_ids == set(PROCESS_TASK_IDS)
+    # 정제는 단위마다 커밋하므로 한 API가 실패해도 성공한 단위의 이벤트는 열어야 한다.
+    assert task.trigger_rule == "all_done"
+
+
 def test_legal_dong_runs_with_timeout(dag: DAG) -> None:
     assert python_task(dag, "refresh_legal_dong").execution_timeout == timedelta(minutes=10)
 
@@ -205,6 +219,7 @@ def test_watcher_fails_the_run_when_any_task_fails(dag: DAG) -> None:
         *CHECK_TASK_IDS,
         *PROCESS_TASK_IDS,
         "refresh_price_movers",
+        "publish_transaction_events",
     }
     assert watcher.trigger_rule == "one_failed"
     assert watcher.retries == 0
@@ -534,7 +549,7 @@ def test_empty_bronze_empties_the_unit() -> None:
 
     # 응답 0건은 거래 없는 단위라 정제 테이블도 비워야 한다. 해제된 거래가 남지 않는다.
     assert any(sql.startswith("DELETE FROM sale_transactions") for sql in conn.statements)
-    assert summary == {"units": 1, "succeeded": 1, "failed": 0, "loaded": 0, "complexes": 0}
+    assert summary == {"units": 1, "succeeded": 1, "failed": 0, "loaded": 0, "complexes": 0, "new_transactions": 0}
 
 
 def legal_dong_item(region_cd: str, name: str) -> dict[str, str]:

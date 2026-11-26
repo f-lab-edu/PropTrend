@@ -26,6 +26,7 @@ up() {
     apply_api kind prop-trend-api "$TAG"
     kubectl --context "$CTX" -n prop-trend rollout status deploy/postgres --timeout=180s
     kubectl --context "$CTX" -n prop-trend rollout status deploy/api --timeout=180s
+    kubectl --context "$CTX" -n prop-trend rollout status deploy/notification-worker --timeout=180s
 
     # EKS에서는 Terraform이 만드는 Secret들이다. 로컬 전용 DB라 비밀번호를 그대로 쓴다.
     local db=postgres:postgres@postgres.prop-trend.svc.cluster.local:5432

@@ -106,6 +106,60 @@ COMPLEX_UPSERT_SQL = {
         DO NOTHING
     """,
 }
+# 단위의 신규 거래가 속한 단지 id를 단지 키로 찾는다. 결과 컬럼은 id 뒤에 COMPLEX_KEY_COLUMNS 순서다.
+# 아파트는 단지 일련번호로, 오피스텔은 시군구로 좁힌다. 둘 다 부분 유니크 인덱스의 선두 컬럼이다.
+COMPLEX_ID_SQL = {
+    "APT": "SELECT id, apartment_serial_number FROM complexes "
+    "WHERE property_type = 'APT' AND apartment_serial_number = ANY(%(serials)s)",
+    "OFFICETEL": f"SELECT id, {', '.join(COMPLEX_KEY_COLUMNS['OFFICETEL'])} FROM complexes "  # noqa: S608
+    "WHERE property_type = 'OFFICETEL' AND sido_code = %(sido)s AND sigungu_code = %(sigungu)s",
+}
+
+# 신규 거래를 가르는 지문. 같은 거래가 갱신마다 같은 값을 갖는 컬럼만 둔다. 등기일자처럼 신고 뒤에 채워지는 값과,
+# 소급해 바뀌는 아파트 단지명은 넣지 않는다. 앞에 단지 키를 둬 신규 거래의 단지를 지문에서 바로 꺼낸다.
+# 해제여부는 신고 뒤에 바뀌지만 넣는다. 빼면 해제된 거래와 같은 값으로 다시 신고된 거래가 응답 순서에 따라 서로의
+# 짝을 가져가 신규 여부가 갈린다. 해제로 바뀐 거래는 짝이 없어도 해제라 알리지 않으므로 결과는 같다.
+SALE_FINGERPRINT_DEAL_COLUMNS = (
+    "deal_date",
+    "exclusive_use_area",
+    "floor",
+    "apartment_dong",
+    "deal_amount",
+    "cancel_deal_type",
+)
+RENT_FINGERPRINT_DEAL_COLUMNS = (
+    "deal_date",
+    "exclusive_use_area",
+    "floor",
+    "deposit",
+    "monthly_rent",
+    "contract_term",
+    "contract_type",
+)
+
+
+def _fingerprint_sql(delete_sql: str, deal_columns: tuple[str, ...]) -> dict[str, tuple[tuple[str, ...], str]]:
+    """단지 유형마다 지문 컬럼과, 단위를 지우며 지운 행의 지문을 돌려받는 삭제문을 만든다."""
+    fingerprints: dict[str, tuple[tuple[str, ...], str]] = {}
+    for property_type, key_columns in COMPLEX_KEY_COLUMNS.items():
+        columns = (*key_columns, *deal_columns)
+        fingerprints[property_type] = (columns, f"{delete_sql} RETURNING {', '.join(columns)}")
+    return fingerprints
+
+
+SALE_FINGERPRINTS = _fingerprint_sql(SALE_DELETE_SQL, SALE_FINGERPRINT_DEAL_COLUMNS)
+RENT_FINGERPRINTS = _fingerprint_sql(RENT_DELETE_SQL, RENT_FINGERPRINT_DEAL_COLUMNS)
+
+# api/src/model/notification.py의 대기열 테이블과 같아야 한다. 회차가 끝나기 전에는 단지마다 열린 행 하나에 건수를
+# 더한다. ON CONFLICT가 부분 유니크 인덱스를 추론하려면 인덱스와 같은 WHERE를 넘겨야 한다.
+TRANSACTION_EVENT_UPSERT_SQL = """
+    INSERT INTO transaction_events (complex_id, sale_count, rent_count) VALUES (%s, %s, %s)
+    ON CONFLICT (complex_id) WHERE available_at IS NULL
+    DO UPDATE SET sale_count = transaction_events.sale_count + EXCLUDED.sale_count,
+                  rent_count = transaction_events.rent_count + EXCLUDED.rent_count
+"""
+# 열린 행을 모두 연다. 이번 회차의 것만 고르지 않으므로, 앞 회차가 발행 전에 끝났어도 남은 행이 함께 열린다.
+TRANSACTION_EVENT_PUBLISH_SQL = "UPDATE transaction_events SET available_at = now() WHERE available_at IS NULL"
 
 # api/src/model/region.py의 컬럼과 같아야 한다. 값은 preprocess_regions가 만든 dict에서 이름으로 꺼낸다.
 REGION_COLUMNS = ("sido_code", "sigungu_code", "sido_name", "sigungu_name")

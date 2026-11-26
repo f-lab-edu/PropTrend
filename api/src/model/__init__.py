@@ -8,6 +8,7 @@
 - favorite: 사용자가 즐겨찾기한 단지
 - region: legal_dong_code_raw_items를 가공해 채우는 시도·시군구 목록
 - market: 정기 갱신이 미리 계산해 두는 시장 지표 결과
+- notification: 즐겨찾기 단지의 신규 거래 알림 대기열과 인앱 알림
 """
 
 from .base import Base
@@ -15,6 +16,7 @@ from .complex import COMPLEX_INDEX_WHERE, COMPLEX_KEY_COLUMNS, COMPLEX_PROPERTY_
 from .favorite import FavoriteComplex
 from .load_progress import RawLoadProgress
 from .market import MarketPriceMover, MarketSnapshot
+from .notification import Notification, TransactionEvent
 from .prop_transaction import (
     PropertyType,
     RentTransaction,
@@ -38,12 +40,14 @@ __all__ = [
     "LegalDongCodeRawItem",
     "MarketPriceMover",
     "MarketSnapshot",
+    "Notification",
     "PropertyType",
     "RTMSRawItem",
     "RawLoadProgress",
     "Region",
     "RentTransaction",
     "SaleTransaction",
+    "TransactionEvent",
     "TransactionMixin",
     "User",
     "UserSession",
